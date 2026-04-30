@@ -7,7 +7,7 @@ from datetime import datetime
 DB = "inventory.db"
 
 def conn():
-return sqlite3.connect(DB, check_same_thread=False)
+ return sqlite3.connect(DB, check_same_thread=False)
 
 def q(query, params=()):
 c = conn()
