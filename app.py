@@ -1,13 +1,13 @@
-# -*- coding: utf-8 -*-
+-- coding: utf-8 --
+
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime
 
 DB = "inventory.db"
 
 def conn():
- return sqlite3.connect(DB, check_same_thread=False)
+return sqlite3.connect(DB, check_same_thread=False)
 
 def q(query, params=()):
 c = conn()
@@ -28,16 +28,15 @@ q("CREATE TABLE IF NOT EXISTS pergola (order_no TEXT, led_type TEXT, qty INT, st
 
 init()
 
-st.title("💡 ניהול לדים פשוט")
+st.title("💡 ניהול לדים")
 
 menu = st.sidebar.radio("תפריט", ["דשבורד", "קליטה", "העברה", "אריזה"])
 
 if menu == "דשבורד":
 data = df("SELECT * FROM inventory")
-st.subheader("מלאי")
 st.dataframe(data)
 
-if menu == "קליטה":
+elif menu == "קליטה":
 led = st.text_input("סוג לד")
 qty = st.number_input("כמות", 1)
 if st.button("הוסף"):
@@ -45,7 +44,7 @@ q("INSERT OR IGNORE INTO inventory VALUES (?,0,0)", (led,))
 q("UPDATE inventory SET main = main + ? WHERE led_type = ?", (qty, led))
 st.success("נוסף למחסן ראשי")
 
-if menu == "העברה":
+elif menu == "העברה":
 data = df("SELECT led_type FROM inventory")
 if not data.empty:
 led = st.selectbox("בחר לד", data["led_type"])
@@ -54,7 +53,7 @@ if st.button("העבר"):
 q("UPDATE inventory SET main = main - ?, pack = pack + ? WHERE led_type = ?", (qty, qty, led))
 st.success("עבר לאריזה")
 
-if menu == "אריזה":
+elif menu == "אריזה":
 order = st.text_input("מספר הזמנה")
 led = st.text_input("סוג לד")
 qty = st.number_input("כמות", 1)
