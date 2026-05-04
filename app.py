@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 from supabase import create_client
 
 SUPABASE_URL = "https://gwiieqmawtudoxafnjeg.supabase.co"
@@ -13,16 +13,14 @@ DEFAULT_MIN_SANTAF = 20
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def today_str():
-    return str(date.today())
-
-
-def now_str():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
 def safe_data(response):
     return response.data if response and response.data else []
+
+
+def short_date(value):
+    if not value:
+        return "-"
+    return str(value).replace("T", " ")[:16]
 
 
 def get_led_rows():
@@ -63,6 +61,13 @@ def ensure_santaf_lengths():
                 "quantity": 0,
                 "min_quantity": DEFAULT_MIN_SANTAF
             }).execute()
+
+
+def reset_led_form():
+    st.session_state["led_receive_order"] = ""
+    st.session_state["led_receive_type"] = ""
+    st.session_state["led_receive_qty"] = 1
+    st.session_state["led_receive_notes"] = ""
 
 
 def card(title, lines, warning=False):
@@ -116,11 +121,6 @@ h1, h2, h3 {
 .warn {
     border: 2px solid #ff4b4b;
     background: #fff2f2;
-}
-
-.small-note {
-    color: #666;
-    font-size: 14px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -190,12 +190,17 @@ elif page == "💡 קליטת לדים":
         elif not led_type.strip():
             st.error("חובה להזין סוג לד.")
         else:
-            supabase.table("led_inventory").insert({
-                "order_number": order_number.strip(),
-                "led_type": led_type.strip(),
-                "quantity": int(quantity)
-            }).execute()
+            with st.spinner("שומר..."):
+                supabase.table("led_inventory").insert({
+                    "order_number": order_number.strip(),
+                    "led_type": led_type.strip(),
+                    "quantity": int(quantity),
+                    "notes": notes.strip()
+                }).execute()
+
             st.success("✅ הלדים נשמרו ב־Supabase.")
+            reset_led_form()
+            st.rerun()
 
 elif page == "💡 ניפוק לדים":
     st.header("💡 ניפוק לדים לפרגולה")
@@ -204,6 +209,14 @@ elif page == "💡 ניפוק לדים":
 
     pergola_order = st.text_input("מספר הזמנת פרגולה", key="led_issue_pergola")
     issue_date = st.date_input("תאריך ניפוק", value=date.today(), key="led_issue_date")
+
+    search = st.text_input("🔍 חיפוש לפי מספר הזמנת ספק או סוג לד", key="led_issue_search")
+    if search.strip():
+        rows = [
+            r for r in rows
+            if search.strip().lower() in str(r.get("order_number", "")).lower()
+            or search.strip().lower() in str(r.get("led_type", "")).lower()
+        ]
 
     if not rows:
         st.info("אין לדים זמינים לניפוק.")
@@ -227,17 +240,27 @@ elif page == "💡 ניפוק לדים":
             elif issue_qty > current_qty:
                 st.error(f"אין מספיק מלאי. קיים: {current_qty}")
             else:
-                new_qty = current_qty - int(issue_qty)
-                supabase.table("led_inventory").update({
-                    "quantity": new_qty
-                }).eq("id", selected["id"]).execute()
+                with st.spinner("מעדכן מלאי..."):
+                    new_qty = current_qty - int(issue_qty)
+                    supabase.table("led_inventory").update({
+                        "quantity": new_qty
+                    }).eq("id", selected["id"]).execute()
 
                 st.success(f"✅ נופקו {issue_qty} לדים להזמנה {pergola_order}.")
+                st.rerun()
 
 elif page == "💡 מלאי לדים":
     st.header("💡 מלאי לדים")
 
     rows = get_led_rows()
+
+    search = st.text_input("🔍 חיפוש לפי מספר הזמנת ספק או סוג לד", key="led_stock_search")
+    if search.strip():
+        rows = [
+            r for r in rows
+            if search.strip().lower() in str(r.get("order_number", "")).lower()
+            or search.strip().lower() in str(r.get("led_type", "")).lower()
+        ]
 
     if not rows:
         st.info("אין נתונים.")
@@ -248,14 +271,15 @@ elif page == "💡 מלאי לדים":
                 [
                     f"מספר הזמנת ספק: {r.get('order_number')}",
                     f"כמות במלאי: {r.get('quantity')}",
-                    f"תאריך יצירה: {r.get('created_at')}",
+                    f"הערות: {r.get('notes') or '-'}",
+                    f"תאריך יצירה: {short_date(r.get('created_at'))}",
                 ]
             )
 
 elif page == "🟫 קליטת סנטפים":
     st.header("🟫 קליטת סנטפים למלאי")
 
-    st.write(f"סוג מוצר: **{SANTAF_TYPE}**")
+    st.write(f"סוג מוצר: **סנטף BH שקוף**")
 
     supplier_ref = st.text_input("מספר הזמנה / אסמכתא", key="santaf_receive_ref")
     receive_date = st.date_input("תאריך קליטה", value=date.today(), key="santaf_receive_date")
@@ -279,11 +303,66 @@ elif page == "🟫 קליטת סנטפים":
         else:
             total = 0
 
-            for length, qty in qty_by_length.items():
-                if int(qty) > 0:
-                    row = get_santaf_row(length)
-                    current = int(row.get("quantity") or 0)
-                    new_qty = current + int(qty)
+            with st.spinner("שומר סנטפים..."):
+                for length, qty in qty_by_length.items():
+                    if int(qty) > 0:
+                        row = get_santaf_row(length)
+                        current = int(row.get("quantity") or 0)
+                        new_qty = current + int(qty)
+
+                        supabase.table("santaf_inventory").update({
+                            "quantity": new_qty
+                        }).eq("id", row["id"]).execute()
+
+                        supabase.table("santaf_movements").insert({
+                            "length": length,
+                            "quantity": int(qty),
+                            "type": "IN",
+                            "date": str(receive_date)
+                        }).execute()
+
+                        total += int(qty)
+
+            if total == 0:
+                st.warning("לא הוזנה שום כמות.")
+            else:
+                st.success(f"✅ נקלטו {total} סנטפים למלאי.")
+                st.rerun()
+
+elif page == "🟫 ניפוק סנטפים":
+    st.header("🟫 ניפוק סנטפים לפרגולה")
+
+    pergola_order = st.text_input("מספר הזמנת פרגולה", key="santaf_issue_order")
+    issue_date = st.date_input("תאריך ניפוק", value=date.today(), key="santaf_issue_date")
+
+    length_search = st.text_input("🔍 חיפוש לפי אורך", key="santaf_issue_length_search")
+    available_lengths = SANTAF_LENGTHS
+    if length_search.strip():
+        available_lengths = [l for l in SANTAF_LENGTHS if length_search.strip() in str(l)]
+
+    if not available_lengths:
+        st.warning("לא נמצאה מידה מתאימה.")
+    else:
+        length = st.selectbox("בחר מידה", available_lengths, key="santaf_issue_length")
+
+        row = get_santaf_row(length)
+        current_qty = int(row.get("quantity") or 0)
+        min_qty = int(row.get("min_quantity") or DEFAULT_MIN_SANTAF)
+
+        st.write(f"**מלאי נוכחי:** {current_qty}")
+        st.write(f"**מינימום:** {min_qty}")
+
+        issue_qty = st.number_input("כמות לניפוק", min_value=1, value=1, step=1, key="santaf_issue_qty")
+        notes = st.text_area("הערות", key="santaf_issue_notes")
+
+        if st.button("✅ נפק סנטף", key="btn_santaf_issue"):
+            if not pergola_order.strip():
+                st.error("חובה להזין מספר הזמנת פרגולה.")
+            elif issue_qty > current_qty:
+                st.error(f"אין מספיק מלאי. קיים: {current_qty}")
+            else:
+                with st.spinner("מעדכן מלאי..."):
+                    new_qty = current_qty - int(issue_qty)
 
                     supabase.table("santaf_inventory").update({
                         "quantity": new_qty
@@ -291,63 +370,25 @@ elif page == "🟫 קליטת סנטפים":
 
                     supabase.table("santaf_movements").insert({
                         "length": length,
-                        "quantity": int(qty),
-                        "type": "IN",
-                        "date": str(receive_date)
+                        "quantity": int(issue_qty),
+                        "type": "OUT",
+                        "date": str(issue_date)
                     }).execute()
 
-                    total += int(qty)
-
-            if total == 0:
-                st.warning("לא הוזנה שום כמות.")
-            else:
-                st.success(f"✅ נקלטו {total} סנטפים למלאי.")
-
-elif page == "🟫 ניפוק סנטפים":
-    st.header("🟫 ניפוק סנטפים לפרגולה")
-
-    pergola_order = st.text_input("מספר הזמנת פרגולה", key="santaf_issue_order")
-    issue_date = st.date_input("תאריך ניפוק", value=date.today(), key="santaf_issue_date")
-    length = st.selectbox("בחר מידה", SANTAF_LENGTHS, key="santaf_issue_length")
-
-    row = get_santaf_row(length)
-    current_qty = int(row.get("quantity") or 0)
-    min_qty = int(row.get("min_quantity") or DEFAULT_MIN_SANTAF)
-
-    st.write(f"**מלאי נוכחי:** {current_qty}")
-    st.write(f"**מינימום:** {min_qty}")
-
-    issue_qty = st.number_input("כמות לניפוק", min_value=1, value=1, step=1, key="santaf_issue_qty")
-    notes = st.text_area("הערות", key="santaf_issue_notes")
-
-    if st.button("✅ נפק סנטף", key="btn_santaf_issue"):
-        if not pergola_order.strip():
-            st.error("חובה להזין מספר הזמנת פרגולה.")
-        elif issue_qty > current_qty:
-            st.error(f"אין מספיק מלאי. קיים: {current_qty}")
-        else:
-            new_qty = current_qty - int(issue_qty)
-
-            supabase.table("santaf_inventory").update({
-                "quantity": new_qty
-            }).eq("id", row["id"]).execute()
-
-            supabase.table("santaf_movements").insert({
-                "length": length,
-                "quantity": int(issue_qty),
-                "type": "OUT",
-                "date": str(issue_date)
-            }).execute()
-
-            if new_qty < min_qty:
-                st.warning(f"✅ נופק, אבל המלאי ירד מתחת למינימום. נשאר: {new_qty}")
-            else:
-                st.success("✅ הסנטף נופק בהצלחה.")
+                if new_qty < min_qty:
+                    st.warning(f"✅ נופק, אבל המלאי ירד מתחת למינימום. נשאר: {new_qty}")
+                else:
+                    st.success("✅ הסנטף נופק בהצלחה.")
+                st.rerun()
 
 elif page == "🟫 מלאי סנטפים":
     st.header("🟫 מלאי סנטפים")
 
     rows = get_santaf_rows()
+
+    length_search = st.text_input("🔍 חיפוש לפי אורך", key="santaf_stock_search")
+    if length_search.strip():
+        rows = [r for r in rows if length_search.strip() in str(r.get("length", ""))]
 
     for r in rows:
         quantity = int(r.get("quantity") or 0)
@@ -356,7 +397,7 @@ elif page == "🟫 מלאי סנטפים":
         card(
             f"{r.get('length')} ממ",
             [
-                f"סוג: {SANTAF_TYPE}",
+                f"סוג: סנטף BH שקוף",
                 f"מלאי נוכחי: {quantity}",
                 f"מינימום: {min_quantity}",
             ],
@@ -383,10 +424,12 @@ elif page == "⚙️ מינימום סנטפים":
             )
 
             if st.button(f"💾 שמור מינימום {length}", key=f"btn_save_min_{length}"):
-                supabase.table("santaf_inventory").update({
-                    "min_quantity": int(new_min)
-                }).eq("id", r["id"]).execute()
+                with st.spinner("שומר..."):
+                    supabase.table("santaf_inventory").update({
+                        "min_quantity": int(new_min)
+                    }).eq("id", r["id"]).execute()
                 st.success("✅ נשמר.")
+                st.rerun()
 
 elif page == "📊 דוח צריכת סנטפים":
     st.header("📊 דוח צריכת סנטפים")
