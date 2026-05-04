@@ -6,8 +6,8 @@ import pandas as pd
 # 🔑 הגדרות Supabase
 # ==============================
 
-SUPABASE_URL = "PUT_YOUR_URL_HERE"
-SUPABASE_KEY = "PUT_YOUR_ANON_KEY_HERE"
+SUPABASE_URL = "https://gwlieqmawtudoxafnjeg.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3aWllcW1hd3R1ZG94YWZuamVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzkxMDAsImV4cCI6MjA5MzQ1NTEwMH0.v3fxlk30SHNPqyncYB557lLYsk99D50DGsPhJUNkeLk"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
