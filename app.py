@@ -122,6 +122,12 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+/* ── Force sidebar closed on mobile ── */
+@media (max-width: 768px) {
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="collapsedControl"] { display: flex !important; }
+}
+
 /* ── Global ── */
 html, body, [class*="css"] {
     font-family: 'Segoe UI', Arial, sans-serif;
