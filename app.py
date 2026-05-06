@@ -122,10 +122,33 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* ── Force sidebar closed on mobile ── */
+/* ── Mobile sidebar ── */
 @media (max-width: 768px) {
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="collapsedControl"] { display: flex !important; }
+    /* Hide sidebar by default — initial_sidebar_state handles it */
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        display: none !important;
+    }
+    /* Style the collapse/expand toggle button as hamburger */
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        position: fixed !important;
+        top: 10px !important;
+        right: 10px !important;
+        left: auto !important;
+        z-index: 9999 !important;
+        background: #1a2340 !important;
+        border-radius: 8px !important;
+        width: 42px !important;
+        height: 42px !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+    }
+    [data-testid="collapsedControl"] svg {
+        fill: #ffffff !important;
+        width: 20px !important;
+        height: 20px !important;
+    }
 }
 
 /* ── Global ── */
