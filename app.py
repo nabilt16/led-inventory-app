@@ -104,26 +104,26 @@ def reset_led_form():
 
 
 def text_input_clear(label, key, **kwargs):
-    c1, c2 = st.columns([10, 1])
-    with c1:
-        st.text_input(label, key=key, **kwargs)
-    with c2:
+    c_x, c_input = st.columns([1, 10])
+    with c_x:
         st.markdown("<p style='margin:0 0 4px;font-size:14px;color:transparent;line-height:1.4;'>.</p>", unsafe_allow_html=True)
-        if st.button("✕", key=f"_clr_{key}", use_container_width=True, help="נקה"):
+        if st.button("✕", key=f"_clr_{key}", help="נקה"):
             st.session_state[key] = ""
             st.rerun()
+    with c_input:
+        st.text_input(label, key=key, **kwargs)
     return st.session_state.get(key, "")
 
 
 def text_area_clear(label, key, **kwargs):
-    c1, c2 = st.columns([10, 1])
-    with c1:
-        st.text_area(label, key=key, **kwargs)
-    with c2:
+    c_x, c_input = st.columns([1, 10])
+    with c_x:
         st.markdown("<p style='margin:0 0 4px;font-size:14px;color:transparent;line-height:1.4;'>.</p>", unsafe_allow_html=True)
-        if st.button("✕", key=f"_clr_{key}", use_container_width=True, help="נקה"):
+        if st.button("✕", key=f"_clr_{key}", help="נקה"):
             st.session_state[key] = ""
             st.rerun()
+    with c_input:
+        st.text_area(label, key=key, **kwargs)
     return st.session_state.get(key, "")
 
 
