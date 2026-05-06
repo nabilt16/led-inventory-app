@@ -103,15 +103,40 @@ def reset_led_form():
     st.session_state["led_receive_notes"] = ""
 
 
+def _inject_focus(label):
+    escaped = label.replace("'", "\\'")
+    st.markdown(f"""
+    <script>
+    (function() {{
+        function tryFocus() {{
+            var doc = window.parent.document;
+            var inputs = doc.querySelectorAll('input[type="text"], input[type="search"], input:not([type])');
+            for (var i = 0; i < inputs.length; i++) {{
+                if (inputs[i].getAttribute('aria-label') === '{escaped}') {{
+                    inputs[i].focus();
+                    return;
+                }}
+            }}
+        }}
+        setTimeout(tryFocus, 150);
+    }})();
+    </script>
+    """, unsafe_allow_html=True)
+
+
 def text_input_clear(label, key, **kwargs):
     c_x, c_input = st.columns([1, 10])
     with c_x:
         st.markdown("<p style='margin:0 0 4px;font-size:14px;color:transparent;line-height:1.4;'>.</p>", unsafe_allow_html=True)
         if st.button("✕", key=f"_clr_{key}", help="נקה"):
             st.session_state[key] = ""
+            st.session_state[f"_focus_{key}"] = True
             st.rerun()
     with c_input:
         st.text_input(label, key=key, **kwargs)
+    if st.session_state.get(f"_focus_{key}", False):
+        st.session_state[f"_focus_{key}"] = False
+        _inject_focus(label)
     return st.session_state.get(key, "")
 
 
@@ -121,9 +146,13 @@ def text_area_clear(label, key, **kwargs):
         st.markdown("<p style='margin:0 0 4px;font-size:14px;color:transparent;line-height:1.4;'>.</p>", unsafe_allow_html=True)
         if st.button("✕", key=f"_clr_{key}", help="נקה"):
             st.session_state[key] = ""
+            st.session_state[f"_focus_{key}"] = True
             st.rerun()
     with c_input:
         st.text_area(label, key=key, **kwargs)
+    if st.session_state.get(f"_focus_{key}", False):
+        st.session_state[f"_focus_{key}"] = False
+        _inject_focus(label)
     return st.session_state.get(key, "")
 
 
