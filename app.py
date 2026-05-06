@@ -116,7 +116,8 @@ def card(title, lines, warning=False):
 st.set_page_config(
     page_title="ניהול לדים וסנטפים — Trellidor",
     page_icon="📦",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 st.markdown("""
