@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import json
 import os
@@ -104,13 +105,13 @@ def reset_led_form():
 
 
 def _inject_focus(label):
-    escaped = label.replace("'", "\\'")
-    st.markdown(f"""
+    escaped = label.replace("'", "\\'").replace('"', '\\"')
+    components.html(f"""
     <script>
     (function() {{
         function tryFocus() {{
             var doc = window.parent.document;
-            var inputs = doc.querySelectorAll('input[type="text"], input[type="search"], input:not([type])');
+            var inputs = doc.querySelectorAll('input');
             for (var i = 0; i < inputs.length; i++) {{
                 if (inputs[i].getAttribute('aria-label') === '{escaped}') {{
                     inputs[i].focus();
@@ -118,10 +119,10 @@ def _inject_focus(label):
                 }}
             }}
         }}
-        setTimeout(tryFocus, 150);
+        setTimeout(tryFocus, 200);
     }})();
     </script>
-    """, unsafe_allow_html=True)
+    """, height=0)
 
 
 def text_input_clear(label, key, **kwargs):
