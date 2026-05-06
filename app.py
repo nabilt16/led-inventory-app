@@ -103,6 +103,30 @@ def reset_led_form():
     st.session_state["led_receive_notes"] = ""
 
 
+def text_input_clear(label, key, **kwargs):
+    c1, c2 = st.columns([10, 1])
+    with c1:
+        st.text_input(label, key=key, **kwargs)
+    with c2:
+        st.markdown("<p style='margin:0 0 4px;font-size:14px;color:transparent;line-height:1.4;'>.</p>", unsafe_allow_html=True)
+        if st.button("✕", key=f"_clr_{key}", use_container_width=True, help="נקה"):
+            st.session_state[key] = ""
+            st.rerun()
+    return st.session_state.get(key, "")
+
+
+def text_area_clear(label, key, **kwargs):
+    c1, c2 = st.columns([10, 1])
+    with c1:
+        st.text_area(label, key=key, **kwargs)
+    with c2:
+        st.markdown("<p style='margin:0 0 4px;font-size:14px;color:transparent;line-height:1.4;'>.</p>", unsafe_allow_html=True)
+        if st.button("✕", key=f"_clr_{key}", use_container_width=True, help="נקה"):
+            st.session_state[key] = ""
+            st.rerun()
+    return st.session_state.get(key, "")
+
+
 def card(title, lines, warning=False):
     cls = "card warn" if warning else "card"
     html = f"<div class='{cls}'><div class='card-title'>{title}</div>"
@@ -255,6 +279,23 @@ h1, h2, h3, h4 { text-align: right; }
 .low-val { font-weight: 600; color: #333; }
 .low-val.red { color: #c0392b; }
 
+/* ── Clear (X) buttons on inputs ── */
+button[kind="secondary"] {
+    min-height: 38px !important;
+    height: 38px !important;
+    padding: 0 8px !important;
+    font-size: 14px !important;
+    background: #f0f2f6 !important;
+    color: #888 !important;
+    border: 1px solid #d0d4e0 !important;
+    border-radius: 6px !important;
+    min-width: unset !important;
+}
+button[kind="secondary"]:hover {
+    background: #e0e4ec !important;
+    color: #333 !important;
+}
+
 /* ── Section divider ── */
 .section-title {
     font-size: 17px;
@@ -385,11 +426,11 @@ if page == "🏠 דשבורד":
             options = email_history + ["✏️ הזן כתובת חדשה"]
             selected_option = st.selectbox("כתובת מייל נמען", options, key="email_select")
             if selected_option == "✏️ הזן כתובת חדשה":
-                recipient = st.text_input("הכנס כתובת מייל", key="email_recipient_new")
+                recipient = text_input_clear("הכנס כתובת מייל", key="email_recipient_new")
             else:
                 recipient = selected_option
         else:
-            recipient = st.text_input("כתובת מייל נמען", key="email_recipient")
+            recipient = text_input_clear("כתובת מייל נמען", key="email_recipient")
 
         if st.button("📧 שלח דוח מלאי", key="btn_send_email"):
             if not recipient or not recipient.strip():
@@ -461,10 +502,10 @@ if page == "🏠 דשבורד":
 elif page == "💡 קליטת לדים":
     st.markdown("""<div class="page-banner"><h2>💡 קליטת לדים</h2><p>הוספת לדים למלאי לפי הזמנת ספק</p></div>""", unsafe_allow_html=True)
 
-    order_number = st.text_input("מספר הזמנת לדים / ספק", key="led_receive_order")
-    led_type = st.text_input("סוג לד", key="led_receive_type")
+    order_number = text_input_clear("מספר הזמנת לדים / ספק", key="led_receive_order")
+    led_type = text_input_clear("סוג לד", key="led_receive_type")
     quantity = st.number_input("כמות", min_value=1, value=1, step=1, key="led_receive_qty")
-    notes = st.text_area("הערות", key="led_receive_notes")
+    notes = text_area_clear("הערות", key="led_receive_notes")
 
     if st.button("✅ הוסף למלאי לדים", key="btn_led_receive"):
         if not order_number.strip():
@@ -489,10 +530,10 @@ elif page == "💡 ניפוק לדים":
 
     rows = [r for r in get_led_rows() if int(r.get("quantity") or 0) > 0]
 
-    pergola_order = st.text_input("מספר הזמנת פרגולה", key="led_issue_pergola")
+    pergola_order = text_input_clear("מספר הזמנת פרגולה", key="led_issue_pergola")
     issue_date = st.date_input("תאריך ניפוק", value=date.today(), key="led_issue_date")
 
-    search = st.text_input("🔍 חיפוש לפי מספר הזמנת ספק או סוג לד", key="led_issue_search")
+    search = text_input_clear("🔍 חיפוש לפי מספר הזמנת ספק או סוג לד", key="led_issue_search")
     if search.strip():
         rows = [
             r for r in rows
@@ -512,7 +553,7 @@ elif page == "💡 ניפוק לדים":
         selected = dict(options)[selected_label]
 
         issue_qty = st.number_input("כמות לניפוק", min_value=1, value=1, step=1, key="led_issue_qty")
-        notes = st.text_area("הערות", key="led_issue_notes")
+        notes = text_area_clear("הערות", key="led_issue_notes")
 
         if st.button("✅ נפק לד", key="btn_led_issue"):
             current_qty = int(selected.get("quantity") or 0)
@@ -541,7 +582,7 @@ elif page == "💡 מלאי לדים":
 
     rows = get_led_rows()
 
-    search = st.text_input("🔍 חיפוש לפי מספר הזמנת ספק או סוג לד", key="led_stock_search")
+    search = text_input_clear("🔍 חיפוש לפי מספר הזמנת ספק או סוג לד", key="led_stock_search")
     if search.strip():
         rows = [
             r for r in rows
@@ -566,9 +607,9 @@ elif page == "💡 מלאי לדים":
 elif page == "🟫 קליטת סנטפים":
     st.markdown("""<div class="page-banner"><h2>🟫 קליטת סנטפים</h2><p>הוספת סנטפים למלאי — סנטף BH שקוף</p></div>""", unsafe_allow_html=True)
 
-    supplier_ref = st.text_input("מספר הזמנה / אסמכתא", key="santaf_receive_ref")
+    supplier_ref = text_input_clear("מספר הזמנה / אסמכתא", key="santaf_receive_ref")
     receive_date = st.date_input("תאריך קליטה", value=date.today(), key="santaf_receive_date")
-    notes = st.text_area("הערות", key="santaf_receive_notes")
+    notes = text_area_clear("הערות", key="santaf_receive_notes")
 
     st.info("הכנס כמות רק במידות שקיבלת. שאר המידות תשאיר 0.")
 
@@ -620,10 +661,10 @@ elif page == "🟫 קליטת סנטפים":
 elif page == "🟫 ניפוק סנטפים":
     st.markdown("""<div class="page-banner"><h2>🟫 ניפוק סנטפים</h2><p>ניפוק סנטפים לפרגולה</p></div>""", unsafe_allow_html=True)
 
-    pergola_order = st.text_input("מספר הזמנת פרגולה", key="santaf_issue_order")
+    pergola_order = text_input_clear("מספר הזמנת פרגולה", key="santaf_issue_order")
     issue_date = st.date_input("תאריך ניפוק", value=date.today(), key="santaf_issue_date")
 
-    length_search = st.text_input("🔍 חיפוש לפי אורך", key="santaf_issue_length_search")
+    length_search = text_input_clear("🔍 חיפוש לפי אורך", key="santaf_issue_length_search")
     available_lengths = SANTAF_LENGTHS
     if length_search.strip():
         available_lengths = [l for l in SANTAF_LENGTHS if length_search.strip() in str(l)]
@@ -642,7 +683,7 @@ elif page == "🟫 ניפוק סנטפים":
         col2.metric("מינימום", min_qty)
 
         issue_qty = st.number_input("כמות לניפוק", min_value=1, value=1, step=1, key="santaf_issue_qty")
-        notes = st.text_area("הערות", key="santaf_issue_notes")
+        notes = text_area_clear("הערות", key="santaf_issue_notes")
 
         if st.button("✅ נפק סנטף", key="btn_santaf_issue"):
             if not pergola_order.strip():
@@ -680,7 +721,7 @@ elif page == "🟫 מלאי סנטפים":
 
     rows = get_santaf_rows()
 
-    length_search = st.text_input("🔍 חיפוש לפי אורך", key="santaf_stock_search")
+    length_search = text_input_clear("🔍 חיפוש לפי אורך", key="santaf_stock_search")
     if length_search.strip():
         rows = [r for r in rows if length_search.strip() in str(r.get("length", ""))]
 
