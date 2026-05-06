@@ -122,34 +122,15 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* ── Mobile sidebar ── */
+/* ── Mobile: hide sidebar, show top nav ── */
 @media (max-width: 768px) {
-    /* Hide sidebar by default — initial_sidebar_state handles it */
-    [data-testid="stSidebar"][aria-expanded="false"] {
-        display: none !important;
-    }
-    /* Style the collapse/expand toggle button as hamburger */
-    [data-testid="collapsedControl"] {
-        display: flex !important;
-        position: fixed !important;
-        top: 10px !important;
-        right: 10px !important;
-        left: auto !important;
-        z-index: 9999 !important;
-        background: #1a2340 !important;
-        border-radius: 8px !important;
-        width: 42px !important;
-        height: 42px !important;
-        align-items: center !important;
-        justify-content: center !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
-    }
-    [data-testid="collapsedControl"] svg {
-        fill: #ffffff !important;
-        width: 20px !important;
-        height: 20px !important;
-    }
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="collapsedControl"] { display: none !important; }
+    .mobile-nav-wrap { display: block !important; }
+    .main .block-container { padding: 0.5rem 0.8rem !important; }
 }
+/* ── Desktop: hide mobile top nav ── */
+.mobile-nav-wrap { display: none; }
 
 /* ── Global ── */
 html, body, [class*="css"] {
@@ -289,7 +270,31 @@ h1, h2, h3, h4 { text-align: right; }
 
 ensure_santaf_lengths()
 
-# ── Sidebar navigation ────────────────────────────────────────────────────────
+PAGES = [
+    "🏠 דשבורד",
+    "💡 קליטת לדים",
+    "💡 ניפוק לדים",
+    "💡 מלאי לדים",
+    "🟫 קליטת סנטפים",
+    "🟫 ניפוק סנטפים",
+    "🟫 מלאי סנטפים",
+    "⚙️ מינימום סנטפים",
+    "📊 דוח צריכת סנטפים",
+    "📅 דוח חודשי סנטפים",
+]
+
+if "current_page" not in st.session_state:
+    st.session_state.current_page = PAGES[0]
+
+# ── Mobile top nav (hidden on desktop via CSS) ────────────────────────────────
+st.markdown('<div class="mobile-nav-wrap">', unsafe_allow_html=True)
+mobile_sel = st.selectbox("ניווט", PAGES,
+    index=PAGES.index(st.session_state.current_page),
+    key="mobile_nav", label_visibility="collapsed")
+st.markdown('</div>', unsafe_allow_html=True)
+st.session_state.current_page = mobile_sel
+
+# ── Sidebar navigation (hidden on mobile via CSS) ─────────────────────────────
 with st.sidebar:
     st.markdown("""
     <div style="text-align:center; padding: 18px 0 12px;">
@@ -299,37 +304,15 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     st.divider()
-
     st.markdown("<div style='font-size:11px; color:#8899bb; text-transform:uppercase; letter-spacing:1px; padding: 4px 0;'>ראשי</div>", unsafe_allow_html=True)
-    page = st.radio("ניווט", [
-        "🏠 דשבורד",
-        "💡 קליטת לדים",
-        "💡 ניפוק לדים",
-        "💡 מלאי לדים",
-        "🟫 קליטת סנטפים",
-        "🟫 ניפוק סנטפים",
-        "🟫 מלאי סנטפים",
-        "⚙️ מינימום סנטפים",
-        "📊 דוח צריכת סנטפים",
-        "📅 דוח חודשי סנטפים",
-    ], key="main_menu", label_visibility="collapsed")
-
+    desktop_sel = st.radio("ניווט", PAGES,
+        index=PAGES.index(st.session_state.current_page),
+        key="desktop_nav", label_visibility="collapsed")
+    st.session_state.current_page = desktop_sel
     st.divider()
     st.markdown(f"<div style='font-size:11px; color:#8899bb; text-align:center;'>{datetime.now().strftime('%d/%m/%Y %H:%M')}</div>", unsafe_allow_html=True)
 
-st.markdown("""
-<script>
-document.addEventListener('click', function(e) {
-    if (window.innerWidth > 768) return;
-    var inSidebar = e.target.closest('[data-testid="stSidebar"]');
-    if (!inSidebar) return;
-    setTimeout(function() {
-        var btn = document.querySelector('[data-testid="collapsedControl"]');
-        if (btn) btn.click();
-    }, 200);
-}, true);
-</script>
-""", unsafe_allow_html=True)
+page = st.session_state.current_page
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
