@@ -285,14 +285,24 @@ PAGES = [
 
 if "current_page" not in st.session_state:
     st.session_state.current_page = PAGES[0]
+if "mobile_nav" not in st.session_state:
+    st.session_state.mobile_nav = PAGES[0]
+if "desktop_nav" not in st.session_state:
+    st.session_state.desktop_nav = PAGES[0]
+
+def on_mobile_change():
+    st.session_state.current_page = st.session_state.mobile_nav
+    st.session_state.desktop_nav  = st.session_state.mobile_nav
+
+def on_desktop_change():
+    st.session_state.current_page = st.session_state.desktop_nav
+    st.session_state.mobile_nav   = st.session_state.desktop_nav
 
 # ── Mobile top nav (hidden on desktop via CSS) ────────────────────────────────
 st.markdown('<div class="mobile-nav-wrap">', unsafe_allow_html=True)
-mobile_sel = st.selectbox("ניווט", PAGES,
-    index=PAGES.index(st.session_state.current_page),
-    key="mobile_nav", label_visibility="collapsed")
+st.selectbox("ניווט", PAGES, key="mobile_nav",
+             on_change=on_mobile_change, label_visibility="collapsed")
 st.markdown('</div>', unsafe_allow_html=True)
-st.session_state.current_page = mobile_sel
 
 # ── Sidebar navigation (hidden on mobile via CSS) ─────────────────────────────
 with st.sidebar:
@@ -305,10 +315,8 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     st.divider()
     st.markdown("<div style='font-size:11px; color:#8899bb; text-transform:uppercase; letter-spacing:1px; padding: 4px 0;'>ראשי</div>", unsafe_allow_html=True)
-    desktop_sel = st.radio("ניווט", PAGES,
-        index=PAGES.index(st.session_state.current_page),
-        key="desktop_nav", label_visibility="collapsed")
-    st.session_state.current_page = desktop_sel
+    st.radio("ניווט", PAGES, key="desktop_nav",
+             on_change=on_desktop_change, label_visibility="collapsed")
     st.divider()
     st.markdown(f"<div style='font-size:11px; color:#8899bb; text-align:center;'>{datetime.now().strftime('%d/%m/%Y %H:%M')}</div>", unsafe_allow_html=True)
 
