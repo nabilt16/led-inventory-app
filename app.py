@@ -317,6 +317,33 @@ with st.sidebar:
     st.divider()
     st.markdown(f"<div style='font-size:11px; color:#8899bb; text-align:center;'>{datetime.now().strftime('%d/%m/%Y %H:%M')}</div>", unsafe_allow_html=True)
 
+st.markdown("""
+<script>
+(function() {
+    function closeSidebarOnMobile() {
+        if (window.innerWidth > 768) return;
+        const sidebar = document.querySelector('[data-testid="stSidebar"]');
+        const toggleBtn = document.querySelector('[data-testid="collapsedControl"]');
+        if (!sidebar || !toggleBtn) return;
+        const labels = sidebar.querySelectorAll('label');
+        labels.forEach(function(label) {
+            label.addEventListener('click', function() {
+                setTimeout(function() {
+                    if (sidebar.getAttribute('aria-expanded') === 'true') {
+                        toggleBtn.click();
+                    }
+                }, 300);
+            });
+        });
+    }
+    // Run after Streamlit renders
+    const observer = new MutationObserver(function() { closeSidebarOnMobile(); });
+    observer.observe(document.body, { childList: true, subtree: true });
+    closeSidebarOnMobile();
+})();
+</script>
+""", unsafe_allow_html=True)
+
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 if page == "🏠 דשבורד":
