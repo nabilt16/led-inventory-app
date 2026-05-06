@@ -319,28 +319,15 @@ with st.sidebar:
 
 st.markdown("""
 <script>
-(function() {
-    function closeSidebarOnMobile() {
-        if (window.innerWidth > 768) return;
-        const sidebar = document.querySelector('[data-testid="stSidebar"]');
-        const toggleBtn = document.querySelector('[data-testid="collapsedControl"]');
-        if (!sidebar || !toggleBtn) return;
-        const labels = sidebar.querySelectorAll('label');
-        labels.forEach(function(label) {
-            label.addEventListener('click', function() {
-                setTimeout(function() {
-                    if (sidebar.getAttribute('aria-expanded') === 'true') {
-                        toggleBtn.click();
-                    }
-                }, 300);
-            });
-        });
-    }
-    // Run after Streamlit renders
-    const observer = new MutationObserver(function() { closeSidebarOnMobile(); });
-    observer.observe(document.body, { childList: true, subtree: true });
-    closeSidebarOnMobile();
-})();
+document.addEventListener('click', function(e) {
+    if (window.innerWidth > 768) return;
+    var inSidebar = e.target.closest('[data-testid="stSidebar"]');
+    if (!inSidebar) return;
+    setTimeout(function() {
+        var btn = document.querySelector('[data-testid="collapsedControl"]');
+        if (btn) btn.click();
+    }, 200);
+}, true);
 </script>
 """, unsafe_allow_html=True)
 
