@@ -1018,3 +1018,88 @@ elif page == "📊 דוח צריכת סנטפים":
                     f"אחוז מכלל הצריכה: {percent:.1f}%",
                 ]
             )
+
+        # ── WhatsApp ──
+        st.divider()
+        st.markdown('<div class="section-title">💬 שלח בווטסאפ</div>', unsafe_allow_html=True)
+        wa_lines_c = [f"📊 דוח צריכת סנטפים — Trellidor\nתקופה: {d1.strftime('%d/%m/%Y')} עד {d2.strftime('%d/%m/%Y')}\nסה\"כ יחידות: {total}\n"]
+        for _, r in report.iterrows():
+            percent = (int(r["quantity"]) / total) * 100 if total else 0
+            wa_lines_c.append(f"• {int(r['length'])} מ\"מ — {int(r['quantity'])} יחידות ({percent:.1f}%)")
+        wa_url_c = f"https://wa.me/?text={quote(chr(10).join(wa_lines_c))}"
+        st.link_button("💬 שלח דוח בווטסאפ", wa_url_c)
+
+        # ── Email ──
+        st.divider()
+        st.markdown('<div class="section-title">📧 שלח דוח צריכה במייל</div>', unsafe_allow_html=True)
+        email_history_c = load_email_history()
+        if email_history_c:
+            options_c = email_history_c + ["✏️ הזן כתובת חדשה"]
+            selected_c = st.selectbox("כתובת מייל נמען", options_c, key="consumption_email_select")
+            if selected_c == "✏️ הזן כתובת חדשה":
+                recipient_c = text_input_clear("הכנס כתובת מייל", key="consumption_email_new")
+            else:
+                recipient_c = selected_c
+        else:
+            recipient_c = text_input_clear("כתובת מייל נמען", key="consumption_email_recipient")
+
+        if st.button("📧 שלח דוח צריכה", key="btn_send_consumption_email"):
+            if not recipient_c or not recipient_c.strip():
+                st.error("יש להזין כתובת מייל נמען.")
+            else:
+                now_str_c = datetime.now().strftime("%d/%m/%Y %H:%M")
+                period_str_c = f"{d1.strftime('%d/%m/%Y')} עד {d2.strftime('%d/%m/%Y')}"
+                table_rows_c = ""
+                for _, r in report.iterrows():
+                    percent_r = (int(r["quantity"]) / total) * 100 if total else 0
+                    table_rows_c += f"""
+                    <tr>
+                        <td style="padding:10px 14px; text-align:center; font-weight:bold;">{int(r['length'])} מ"מ</td>
+                        <td style="padding:10px 14px; text-align:center;">{int(r['quantity'])}</td>
+                        <td style="padding:10px 14px; text-align:center;">{percent_r:.1f}%</td>
+                    </tr>"""
+                html_body_c = f"""
+                <html dir="rtl">
+                <body style="margin:0; padding:20px; background:#f0f0f0; font-family:Arial,sans-serif; direction:rtl;">
+                  <div style="max-width:620px; margin:0 auto; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.12);">
+                    <div style="background:#1a6b3c; padding:22px 28px;">
+                      <h1 style="color:#ffffff; margin:0; font-size:22px;">📊 דוח צריכת סנטפים</h1>
+                      <p style="color:#a8d5b8; margin:8px 0 0; font-size:13px;">תקופה: {period_str_c} &nbsp;|&nbsp; נוצר: {now_str_c}</p>
+                    </div>
+                    <div style="padding:28px;">
+                      <div style="background:#f8f9fa; border-radius:8px; padding:14px 20px; text-align:center; margin-bottom:20px;">
+                        <div style="font-size:26px; font-weight:bold; color:#1a6b3c;">{total}</div>
+                        <div style="font-size:13px; color:#666;">סה"כ יחידות שנופקו</div>
+                      </div>
+                      <table style="width:100%; border-collapse:collapse; font-size:14px; border:1px solid #ddd;">
+                        <thead>
+                          <tr style="background:#1a6b3c; color:#ffffff;">
+                            <th style="padding:11px 14px; text-align:center;">מידה</th>
+                            <th style="padding:11px 14px; text-align:center;">כמות</th>
+                            <th style="padding:11px 14px; text-align:center;">אחוז</th>
+                          </tr>
+                        </thead>
+                        <tbody>{table_rows_c}</tbody>
+                      </table>
+                    </div>
+                    <div style="background:#f5f5f5; padding:16px 28px; text-align:center; font-size:12px; color:#999; border-top:1px solid #e0e0e0;">
+                      Trellidor Israel &nbsp;|&nbsp; מערכת ניהול מלאי לדים וסנטפים
+                    </div>
+                  </div>
+                </body>
+                </html>"""
+                msg_c = MIMEMultipart("alternative")
+                msg_c["Subject"] = f"דוח צריכת סנטפים — {period_str_c}"
+                msg_c["From"] = SENDER_EMAIL
+                msg_c["To"] = recipient_c.strip()
+                msg_c.attach(MIMEText(html_body_c, "html", "utf-8"))
+                try:
+                    with st.spinner("שולח מייל..."):
+                        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                            server.starttls()
+                            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                            server.sendmail(SENDER_EMAIL, recipient_c.strip(), msg_c.as_string())
+                    save_email_to_history(recipient_c.strip())
+                    st.success(f"✅ המייל נשלח בהצלחה אל {recipient_c.strip()}")
+                except Exception as e:
+                    st.error(f"שגיאה בשליחת מייל: {e}")
