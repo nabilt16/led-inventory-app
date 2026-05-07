@@ -859,7 +859,7 @@ elif page == "📋 דוחות":
                 bg   = "#fff0f0" if is_low else "#ffffff"
                 label = f"** {r.get('length')} {MM} **" if is_low else f"{r.get('length')} {MM}"
                 qty_cell = f"<strong style='color:#cc0000'>** {qty} **</strong>" if is_low else str(qty)
-                inv_html_rows += f"<tr style='background:{bg}'><td style='padding:9px 14px;text-align:center;font-weight:bold'>{label}</td><td style='padding:9px 14px;text-align:center'>{qty_cell}</td></tr>"
+                inv_html_rows += f"<tr style='background:{bg}'><td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a'>{label}</td><td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{qty_cell}</td></tr>"
 
             st.markdown(f"""
             <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd;margin-bottom:8px'>
@@ -973,11 +973,11 @@ elif page == "📋 דוחות":
                 mtr  = float(r["meters"])
                 cost_cell = f"₪{mtr * price_m:,.2f}" if price_m > 0 else "—"
                 cons_html_rows += f"""<tr>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold'>{int(r['length'])} {MM}</td>
-                  <td style='padding:9px 14px;text-align:center'>{int(r['quantity'])}</td>
-                  <td style='padding:9px 14px;text-align:center'>{mtr:.1f} מ'</td>
-                  <td style='padding:9px 14px;text-align:center'>{cost_cell}</td>
-                  <td style='padding:9px 14px;text-align:center'>{pct:.1f}%</td>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a'>{int(r['length'])} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{int(r['quantity'])}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{mtr:.1f} מ'</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{cost_cell}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{pct:.1f}%</td>
                 </tr>"""
 
             st.markdown(f"""
@@ -1080,9 +1080,9 @@ elif page == "📋 דוחות":
                 minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
                 gap  = minq - qty
                 ord_html_rows += f"""<tr>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold'>{r.get('length')} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a'>{r.get('length')} {MM}</td>
                   <td style='padding:9px 14px;text-align:center;color:#cc0000'>{qty}</td>
-                  <td style='padding:9px 14px;text-align:center'>{minq}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{minq}</td>
                   <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#c0392b'>{gap}</td>
                 </tr>"""
 
