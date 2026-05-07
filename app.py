@@ -1093,19 +1093,19 @@ elif page == "📋 דוחות":
                 minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
                 gap  = minq - qty
                 ord_html_rows += f"""<tr style='background:#fff8f8'>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a;background:#fff8f8'>{r.get('length')} {MM}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#cc0000;background:#fff8f8'>{qty}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:#fff8f8'>{minq}</td>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#c0392b;background:#fff8f8'>{gap}</td>
+                  <td style='padding:9px 16px;text-align:center;font-weight:bold;color:#1a1a1a;background:#fff8f8;white-space:nowrap'>{r.get('length')} {MM}</td>
+                  <td style='padding:9px 16px;text-align:center;color:#cc0000;background:#fff8f8;white-space:nowrap'>{qty}</td>
+                  <td style='padding:9px 16px;text-align:center;color:#1a1a1a;background:#fff8f8;white-space:nowrap'>{minq}</td>
+                  <td style='padding:9px 16px;text-align:center;font-weight:bold;color:#c0392b;background:#fff8f8;white-space:nowrap'>{gap}</td>
                 </tr>"""
 
             st.markdown(f"""
-            <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd'>
+            <table style='border-collapse:collapse;font-size:14px;border:1px solid #ddd'>
               <thead><tr style='background:#c0392b;color:#fff'>
-                <th style='padding:10px 14px;text-align:center'>מידה</th>
-                <th style='padding:10px 14px;text-align:center'>מלאי נוכחי</th>
-                <th style='padding:10px 14px;text-align:center'>מינימום</th>
-                <th style='padding:10px 14px;text-align:center'>כמה להזמין</th>
+                <th style='padding:10px 16px;text-align:center;white-space:nowrap'>מידה</th>
+                <th style='padding:10px 16px;text-align:center;white-space:nowrap'>מלאי נוכחי</th>
+                <th style='padding:10px 16px;text-align:center;white-space:nowrap'>מינימום</th>
+                <th style='padding:10px 16px;text-align:center;white-space:nowrap'>כמה להזמין</th>
               </tr></thead>
               <tbody>{ord_html_rows}</tbody>
             </table>
