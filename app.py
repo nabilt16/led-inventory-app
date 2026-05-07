@@ -383,6 +383,8 @@ if "mobile_nav" not in st.session_state:
     st.session_state.mobile_nav = PAGES[0]
 if "desktop_nav" not in st.session_state:
     st.session_state.desktop_nav = PAGES[0]
+if "price_per_meter" not in st.session_state:
+    st.session_state.price_per_meter = 0.0
 
 def on_mobile_change():
     st.session_state.current_page = st.session_state.mobile_nav
@@ -852,20 +854,32 @@ elif page == "📋 דוחות":
 
             # Display table
             inv_html_rows = ""
-            for r in inv_rows:
+            for i, r in enumerate(inv_rows):
                 qty  = int(r.get("quantity") or 0)
                 minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
                 is_low = qty < minq
-                bg   = "#fff0f0" if is_low else "#ffffff"
-                label = f"** {r.get('length')} {MM} **" if is_low else f"{r.get('length')} {MM}"
-                qty_cell = f"<strong style='color:#cc0000'>** {qty} **</strong>" if is_low else str(qty)
-                inv_html_rows += f"<tr style='background:{bg}'><td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a'>{label}</td><td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{qty_cell}</td></tr>"
+                if is_low:
+                    row_bg = "#fde8e8"
+                    label_color = "#c0392b"
+                    qty_color = "#c0392b"
+                    label = f"** {r.get('length')} {MM} **"
+                    qty_cell = f"<strong>** {qty} **</strong>"
+                else:
+                    row_bg = "#e8f4f8" if i % 2 == 0 else "#f0f9ff"
+                    label_color = "#1a5276"
+                    qty_color = "#1a5276"
+                    label = f"{r.get('length')} {MM}"
+                    qty_cell = str(qty)
+                inv_html_rows += f"""<tr style='background:{row_bg}'>
+                  <td style='padding:8px 20px;text-align:center;font-weight:bold;color:{label_color};white-space:nowrap'>{label}</td>
+                  <td style='padding:8px 20px;text-align:center;color:{qty_color};font-weight:bold'>{qty_cell}</td>
+                </tr>"""
 
             st.markdown(f"""
-            <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd;margin-bottom:8px'>
-              <thead><tr style='background:#5d4037;color:#fff'>
-                <th style='padding:10px 14px;text-align:center'>מידה</th>
-                <th style='padding:10px 14px;text-align:center'>כמות במלאי</th>
+            <table style='border-collapse:collapse;font-size:14px;border:1px solid #b0cfe0;margin-bottom:8px'>
+              <thead><tr style='background:#1a5276;color:#fff'>
+                <th style='padding:10px 20px;text-align:center'>מידה</th>
+                <th style='padding:10px 20px;text-align:center'>כמות במלאי</th>
               </tr></thead>
               <tbody>{inv_html_rows}</tbody>
             </table>
@@ -875,16 +889,16 @@ elif page == "📋 דוחות":
             st.divider()
 
             # WhatsApp
-            wa_inv = [f"🟫 *דוח מלאי סנטפים — Trellidor*", f"תאריך: {now_inv}", ""]
-            wa_inv.append(f"{'מידה':<12}| כמות")
-            wa_inv.append(f"{'-'*12}|------")
+            wa_inv_header = [f"🟫 *דוח מלאי סנטפים — Trellidor*", f"תאריך: {now_inv}", ""]
+            wa_inv_table = ["מידה     | כמות", "---------|------"]
             for r in inv_rows:
                 qty  = int(r.get("quantity") or 0)
                 minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
-                mid  = f"{r.get('length')} {MM}"
-                qty_str = f"** {qty} **" if qty < minq else str(qty)
-                wa_inv.append(f"{mid:<12}| {qty_str}")
-            wa_url_inv = f"https://wa.me/?text={quote(chr(10).join(wa_inv))}"
+                mid  = f"{r.get('length')}{MM}"
+                qty_str = f"**{qty}**" if qty < minq else str(qty)
+                wa_inv_table.append(f"{mid:<9}| {qty_str}")
+            wa_inv_body = chr(10).join(wa_inv_header) + chr(10) + "```" + chr(10) + chr(10).join(wa_inv_table) + chr(10) + "```"
+            wa_url_inv = f"https://wa.me/?text={quote(wa_inv_body)}"
             c1, c2 = st.columns(2)
             with c1:
                 st.link_button("💬 שלח בווטסאפ", wa_url_inv)
@@ -935,12 +949,10 @@ elif page == "📋 דוחות":
         with col2:
             d2c = st.date_input("עד תאריך", value=today_c, key="cons_to")
 
-        if "monthly_price_val" not in st.session_state:
-            st.session_state.monthly_price_val = 0.0
         price_m = st.number_input("מחיר לכל מטר סנטף (₪)", min_value=0.0,
-                                   value=st.session_state.monthly_price_val,
+                                   value=st.session_state.price_per_meter,
                                    step=0.5, format="%.2f", key="cons_price")
-        st.session_state.monthly_price_val = price_m
+        st.session_state.price_per_meter = price_m
 
         cons_movements = safe_data(
             supabase.table("santaf_movements").select("*")
@@ -972,12 +984,13 @@ elif page == "📋 דוחות":
                 pct  = int(r["quantity"]) / total_qty_c * 100 if total_qty_c else 0
                 mtr  = float(r["meters"])
                 cost_cell = f"₪{mtr * price_m:,.2f}" if price_m > 0 else "—"
-                cons_html_rows += f"""<tr>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a'>{int(r['length'])} {MM}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{int(r['quantity'])}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{mtr:.1f} מ'</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{cost_cell}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{pct:.1f}%</td>
+                row_bg_c = "#f0f4f8" if int(r['length']) % 2 == 0 else "#ffffff"
+                cons_html_rows += f"""<tr style='background:{row_bg_c}'>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a;background:{row_bg_c}'>{int(r['length'])} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{int(r['quantity'])}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{mtr:.1f} מ'</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{cost_cell}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{pct:.1f}%</td>
                 </tr>"""
 
             st.markdown(f"""
@@ -996,18 +1009,18 @@ elif page == "📋 דוחות":
             st.divider()
 
             # WhatsApp
-            wa_c = [f"📊 *דוח צריכת סנטפים — Trellidor*", f"תקופה: {period_c}", ""]
-            wa_c.append(f"סה\"כ יחידות: {total_qty_c}  |  מטרים: {total_m_c:.1f} מ'" + (f"  |  עלות: ₪{total_cost_c:,.2f}" if total_cost_c else ""))
-            wa_c.append("")
-            wa_c.append(f"{'מידה':<12}| {'יחידות':>7} | {'מטרים':>7} | {'עלות':>9} | אחוז")
-            wa_c.append(f"{'-'*12}|{'-'*9}|{'-'*9}|{'-'*11}|-----")
+            wa_c_header = [f"📊 *דוח צריכת סנטפים — Trellidor*", f"תקופה: {period_c}",
+                           f"סה\"כ יחידות: {total_qty_c} | מטרים: {total_m_c:.1f}מ'" + (f" | עלות: ₪{total_cost_c:,.0f}" if total_cost_c else ""), ""]
+            wa_c_table = ["מידה     | יחידות | מטרים | עלות    | אחוז",
+                          "---------|--------|-------|---------|-----"]
             for _, r in rpt_c.iterrows():
                 pct = int(r["quantity"]) / total_qty_c * 100 if total_qty_c else 0
                 mtr = float(r["meters"])
-                cost_s = f"₪{mtr*price_m:,.0f}" if price_m > 0 else "—"
-                mid = f"{int(r['length'])} {MM}"
-                wa_c.append(f"{mid:<12}| {int(r['quantity']):>7} | {mtr:>6.1f} מ' | {cost_s:>9} | {pct:.0f}%")
-            wa_url_c = f"https://wa.me/?text={quote(chr(10).join(wa_c))}"
+                cost_s = f"{mtr*price_m:,.0f}" if price_m > 0 else "—"
+                mid = f"{int(r['length'])}{MM}"
+                wa_c_table.append(f"{mid:<9}| {int(r['quantity']):>6} | {mtr:>5.1f} | {cost_s:>7} | {pct:.0f}%")
+            wa_c_body = chr(10).join(wa_c_header) + "```" + chr(10) + chr(10).join(wa_c_table) + chr(10) + "```"
+            wa_url_c = f"https://wa.me/?text={quote(wa_c_body)}"
             st.link_button("💬 שלח בווטסאפ", wa_url_c)
 
             # Email
@@ -1101,15 +1114,16 @@ elif page == "📋 דוחות":
             st.divider()
 
             # WhatsApp
-            wa_o = [f"📋 *דוח הזמנה — Trellidor*", f"תאריך: {now_ord}", ""]
-            wa_o.append(f"{'מידה':<12}| {'מלאי':>6} | {'מינימום':>8} | להזמין")
-            wa_o.append(f"{'-'*12}|{'-'*8}|{'-'*10}|--------")
+            wa_o_header = [f"📋 *דוח הזמנה — Trellidor*", f"תאריך: {now_ord}", ""]
+            wa_o_table = ["מידה     | מלאי | מינימום | להזמין",
+                          "---------|------|---------|-------"]
             for r in low_rows:
                 qty  = int(r.get("quantity") or 0)
                 minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
-                mid  = f"{r.get('length')} {MM}"
-                wa_o.append(f"{mid:<12}| {qty:>6} | {minq:>8} | {minq-qty}")
-            wa_url_o = f"https://wa.me/?text={quote(chr(10).join(wa_o))}"
+                mid  = f"{r.get('length')}{MM}"
+                wa_o_table.append(f"{mid:<9}| {qty:>4} | {minq:>7} | {minq-qty}")
+            wa_o_body = chr(10).join(wa_o_header) + "```" + chr(10) + chr(10).join(wa_o_table) + chr(10) + "```"
+            wa_url_o = f"https://wa.me/?text={quote(wa_o_body)}"
             st.link_button("💬 שלח בווטסאפ", wa_url_o)
 
             # Email
