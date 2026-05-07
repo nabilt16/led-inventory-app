@@ -158,6 +158,29 @@ def text_area_clear(label, key, **kwargs):
     return st.session_state.get(key, "")
 
 
+def _send_report_email(subject, html_body, recipient):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = recipient
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, recipient, msg.as_string())
+
+
+def _email_widget(key_prefix):
+    history = load_email_history()
+    if history:
+        options = history + ["✏️ הזן כתובת חדשה"]
+        sel = st.selectbox("כתובת מייל נמען", options, key=f"{key_prefix}_sel")
+        if sel == "✏️ הזן כתובת חדשה":
+            return text_input_clear("הכנס כתובת מייל", key=f"{key_prefix}_new")
+        return sel
+    return text_input_clear("כתובת מייל נמען", key=f"{key_prefix}_rec")
+
+
 def card(title, lines, warning=False):
     cls = "card warn" if warning else "card"
     html = f"<div class='{cls}'><div class='card-title'>{title}</div>"
@@ -351,8 +374,7 @@ PAGES = [
     "🟫 ניפוק סנטפים",
     "🟫 מלאי סנטפים",
     "⚙️ מינימום סנטפים",
-    "📊 דוח צריכת סנטפים",
-    "📅 דוח חודשי סנטפים",
+    "📋 דוחות",
 ]
 
 if "current_page" not in st.session_state:
@@ -783,96 +805,6 @@ elif page == "🟫 מלאי סנטפים":
             warning=quantity < min_quantity
         )
 
-    # ── Send report ──
-    all_rows = get_santaf_rows()
-    if all_rows:
-        st.divider()
-
-        # WhatsApp
-        st.markdown('<div class="section-title">💬 שלח בווטסאפ</div>', unsafe_allow_html=True)
-        now_str_si = datetime.now().strftime("%d/%m/%Y %H:%M")
-        wa_lines_si = [f"🟫 דוח מלאי סנטפים — Trellidor\nתאריך: {now_str_si}\n"]
-        for r in all_rows:
-            qty_si = int(r.get("quantity") or 0)
-            min_si = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
-            label_si = f"** {r.get('length')} מ\"מ — {qty_si} יחידות **" if qty_si < min_si else f"{r.get('length')} מ\"מ — {qty_si} יחידות"
-            wa_lines_si.append(f"• {label_si}")
-        wa_url_si = f"https://wa.me/?text={quote(chr(10).join(wa_lines_si))}"
-        st.link_button("💬 שלח דוח מלאי בווטסאפ", wa_url_si)
-
-        # Email
-        st.divider()
-        st.markdown('<div class="section-title">📧 שלח דוח מלאי סנטפים במייל</div>', unsafe_allow_html=True)
-        email_history_si = load_email_history()
-        if email_history_si:
-            options_si = email_history_si + ["✏️ הזן כתובת חדשה"]
-            selected_si = st.selectbox("כתובת מייל נמען", options_si, key="si_email_select")
-            if selected_si == "✏️ הזן כתובת חדשה":
-                recipient_si = text_input_clear("הכנס כתובת מייל", key="si_email_new")
-            else:
-                recipient_si = selected_si
-        else:
-            recipient_si = text_input_clear("כתובת מייל נמען", key="si_email_recipient")
-
-        if st.button("📧 שלח דוח מלאי סנטפים", key="btn_send_si_email"):
-            if not recipient_si or not recipient_si.strip():
-                st.error("יש להזין כתובת מייל נמען.")
-            else:
-                now_str_si2 = datetime.now().strftime("%d/%m/%Y %H:%M")
-                table_rows_si = ""
-                for r in all_rows:
-                    qty_si = int(r.get("quantity") or 0)
-                    min_si = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
-                    is_low = qty_si < min_si
-                    row_bg = "#fff0f0" if is_low else "#ffffff"
-                    qty_cell = f"<strong>** {qty_si} **</strong>" if is_low else str(qty_si)
-                    table_rows_si += f"""
-                    <tr style="background:{row_bg};">
-                        <td style="padding:10px 14px; text-align:center; font-weight:bold;">{r.get('length')} מ"מ</td>
-                        <td style="padding:10px 14px; text-align:center; color:{'#cc0000' if is_low else '#333'};">{qty_cell}</td>
-                    </tr>"""
-                html_body_si = f"""
-                <html dir="rtl">
-                <body style="margin:0; padding:20px; background:#f0f0f0; font-family:Arial,sans-serif; direction:rtl;">
-                  <div style="max-width:580px; margin:0 auto; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.12);">
-                    <div style="background:#5d4037; padding:22px 28px;">
-                      <h1 style="color:#ffffff; margin:0; font-size:22px;">🟫 דוח מלאי סנטפים</h1>
-                      <p style="color:#d7ccc8; margin:8px 0 0; font-size:13px;">תאריך: {now_str_si2}</p>
-                    </div>
-                    <div style="padding:28px;">
-                      <p style="font-size:13px; color:#666; margin-top:0;">מידות המסומנות ב-** נמצאות מתחת לכמות המינימום.</p>
-                      <table style="width:100%; border-collapse:collapse; font-size:14px; border:1px solid #ddd;">
-                        <thead>
-                          <tr style="background:#5d4037; color:#ffffff;">
-                            <th style="padding:11px 14px; text-align:center;">מידה</th>
-                            <th style="padding:11px 14px; text-align:center;">כמות במלאי</th>
-                          </tr>
-                        </thead>
-                        <tbody>{table_rows_si}</tbody>
-                      </table>
-                    </div>
-                    <div style="background:#f5f5f5; padding:16px 28px; text-align:center; font-size:12px; color:#999; border-top:1px solid #e0e0e0;">
-                      Trellidor Israel &nbsp;|&nbsp; מערכת ניהול מלאי לדים וסנטפים
-                    </div>
-                  </div>
-                </body>
-                </html>"""
-                msg_si = MIMEMultipart("alternative")
-                msg_si["Subject"] = f"דוח מלאי סנטפים — {now_str_si2}"
-                msg_si["From"] = SENDER_EMAIL
-                msg_si["To"] = recipient_si.strip()
-                msg_si.attach(MIMEText(html_body_si, "html", "utf-8"))
-                try:
-                    with st.spinner("שולח מייל..."):
-                        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                            server.starttls()
-                            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-                            server.sendmail(SENDER_EMAIL, recipient_si.strip(), msg_si.as_string())
-                    save_email_to_history(recipient_si.strip())
-                    st.success(f"✅ המייל נשלח בהצלחה אל {recipient_si.strip()}")
-                except Exception as e:
-                    st.error(f"שגיאה בשליחת מייל: {e}")
-
 elif page == "⚙️ מינימום סנטפים":
     st.markdown("""<div class="page-banner"><h2>⚙️ הגדרת מינימום</h2><p>קביעת כמות מינימום לכל מידת סנטף</p></div>""", unsafe_allow_html=True)
 
@@ -903,293 +835,321 @@ elif page == "⚙️ מינימום סנטפים":
                     st.success("✅ נשמר.")
                     st.rerun()
 
-elif page == "📅 דוח חודשי סנטפים":
-    st.markdown("""<div class="page-banner"><h2>📅 דוח חודשי סנטפים</h2><p>סיכום ניפוקים לפי תקופה עם עלויות</p></div>""", unsafe_allow_html=True)
+elif page == "📋 דוחות":
+    st.markdown("""<div class="page-banner"><h2>📋 דוחות</h2><p>דוחות מלאי, צריכה והזמנה</p></div>""", unsafe_allow_html=True)
 
-    today = date.today()
-    first_of_month = today.replace(day=1)
+    tab_inv, tab_cons, tab_order = st.tabs(["🟫 דוח מלאי", "📊 דוח צריכה", "📋 דוח הזמנה"])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        d1 = st.date_input("מתאריך", value=first_of_month, key="monthly_from")
-    with col2:
-        d2 = st.date_input("עד תאריך", value=today, key="monthly_to")
+    # ══════════════════════════════════════════════════════
+    # TAB 1 — דוח מלאי סנטפים
+    # ══════════════════════════════════════════════════════
+    with tab_inv:
+        inv_rows = get_santaf_rows()
+        if not inv_rows:
+            st.info("אין נתוני מלאי.")
+        else:
+            now_inv = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-    if "monthly_price_val" not in st.session_state:
-        st.session_state.monthly_price_val = 0.0
+            # Display table
+            inv_html_rows = ""
+            for r in inv_rows:
+                qty  = int(r.get("quantity") or 0)
+                minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                is_low = qty < minq
+                bg   = "#fff0f0" if is_low else "#ffffff"
+                label = f"** {r.get('length')} {MM} **" if is_low else f"{r.get('length')} {MM}"
+                qty_cell = f"<strong style='color:#cc0000'>** {qty} **</strong>" if is_low else str(qty)
+                inv_html_rows += f"<tr style='background:{bg}'><td style='padding:9px 14px;text-align:center;font-weight:bold'>{label}</td><td style='padding:9px 14px;text-align:center'>{qty_cell}</td></tr>"
 
-    price_per_meter = st.number_input(
-        "מחיר לכל מטר סנטף (₪)",
-        min_value=0.0,
-        value=st.session_state.monthly_price_val,
-        step=0.5,
-        format="%.2f",
-        key="monthly_price"
-    )
-    st.session_state.monthly_price_val = price_per_meter
+            st.markdown(f"""
+            <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd;margin-bottom:8px'>
+              <thead><tr style='background:#5d4037;color:#fff'>
+                <th style='padding:10px 14px;text-align:center'>מידה</th>
+                <th style='padding:10px 14px;text-align:center'>כמות במלאי</th>
+              </tr></thead>
+              <tbody>{inv_html_rows}</tbody>
+            </table>
+            <p style='font-size:12px;color:#888;margin:0'>מידות המסומנות ב-** נמצאות מתחת לכמות המינימום</p>
+            """, unsafe_allow_html=True)
 
-    movements = safe_data(
-        supabase.table("santaf_movements")
-        .select("*")
-        .eq("type", "OUT")
-        .gte("date", str(d1))
-        .lte("date", str(d2))
-        .execute()
-    )
+            st.divider()
 
-    if not movements:
-        st.info("אין ניפוקי סנטפים בטווח התאריכים.")
-    else:
-        df = pd.DataFrame(movements)
-        df["meters"] = df["length"].astype(float) / 1000 * df["quantity"].astype(float)
-        report = df.groupby("length").agg(quantity=("quantity", "sum"), meters=("meters", "sum")).reset_index()
+            # WhatsApp
+            wa_inv = [f"🟫 *דוח מלאי סנטפים — Trellidor*", f"תאריך: {now_inv}", ""]
+            wa_inv.append(f"{'מידה':<12}| כמות")
+            wa_inv.append(f"{'-'*12}|------")
+            for r in inv_rows:
+                qty  = int(r.get("quantity") or 0)
+                minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                mid  = f"{r.get('length')} {MM}"
+                qty_str = f"** {qty} **" if qty < minq else str(qty)
+                wa_inv.append(f"{mid:<12}| {qty_str}")
+            wa_url_inv = f"https://wa.me/?text={quote(chr(10).join(wa_inv))}"
+            c1, c2 = st.columns(2)
+            with c1:
+                st.link_button("💬 שלח בווטסאפ", wa_url_inv)
 
-        total_qty = int(report["quantity"].sum())
-        total_meters = report["meters"].sum()
-        total_cost = total_meters * price_per_meter if price_per_meter > 0 else None
+            # Email
+            st.divider()
+            st.markdown('<div class="section-title">📧 שלח במייל</div>', unsafe_allow_html=True)
+            recipient_inv = _email_widget("inv")
+            if st.button("📧 שלח דוח מלאי", key="btn_inv_email"):
+                if not recipient_inv or not recipient_inv.strip():
+                    st.error("יש להזין כתובת מייל נמען.")
+                else:
+                    email_rows = ""
+                    for r in inv_rows:
+                        qty  = int(r.get("quantity") or 0)
+                        minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                        is_low = qty < minq
+                        bg = "#fff0f0" if is_low else "#ffffff"
+                        qty_cell = f"<strong style='color:#cc0000'>** {qty} **</strong>" if is_low else str(qty)
+                        email_rows += f"<tr style='background:{bg}'><td style='padding:9px 14px;text-align:center;font-weight:bold'>{r.get('length')} מ&quot;מ</td><td style='padding:9px 14px;text-align:center'>{qty_cell}</td></tr>"
+                    html_inv = f"""<html dir="rtl"><body style="margin:0;padding:20px;background:#f0f0f0;font-family:Arial,sans-serif;direction:rtl">
+                    <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.12)">
+                      <div style="background:#5d4037;padding:22px 28px"><h1 style="color:#fff;margin:0;font-size:22px">🟫 דוח מלאי סנטפים</h1>
+                      <p style="color:#d7ccc8;margin:8px 0 0;font-size:13px">תאריך: {now_inv}</p></div>
+                      <div style="padding:28px">
+                        <p style="font-size:12px;color:#888;margin:0 0 14px">מידות המסומנות ב-** נמצאות מתחת לכמות המינימום</p>
+                        <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd">
+                          <thead><tr style="background:#5d4037;color:#fff"><th style="padding:10px 14px;text-align:center">מידה</th><th style="padding:10px 14px;text-align:center">כמות</th></tr></thead>
+                          <tbody>{email_rows}</tbody></table></div>
+                      <div style="background:#f5f5f5;padding:14px 28px;text-align:center;font-size:12px;color:#999;border-top:1px solid #e0e0e0">Trellidor Israel | מערכת ניהול מלאי</div>
+                    </div></body></html>"""
+                    try:
+                        with st.spinner("שולח..."):
+                            _send_report_email(f"דוח מלאי סנטפים — {now_inv}", html_inv, recipient_inv.strip())
+                        save_email_to_history(recipient_inv.strip())
+                        st.success(f"✅ נשלח אל {recipient_inv.strip()}")
+                    except Exception as e:
+                        st.error(f"שגיאה: {e}")
 
+    # ══════════════════════════════════════════════════════
+    # TAB 2 — דוח צריכת סנטפים
+    # ══════════════════════════════════════════════════════
+    with tab_cons:
+        today_c = date.today()
         col1, col2 = st.columns(2)
-        col1.metric("סה״כ יחידות שנופקו", total_qty)
-        col2.metric("סה״כ מטרים", f"{total_meters:.1f} מ׳")
-        if total_cost is not None:
-            st.metric("סה״כ עלות", f"₪{total_cost:,.2f}")
+        with col1:
+            d1c = st.date_input("מתאריך", value=today_c.replace(day=1), key="cons_from")
+        with col2:
+            d2c = st.date_input("עד תאריך", value=today_c, key="cons_to")
 
-        st.divider()
-        for _, r in report.iterrows():
-            meters = float(r["meters"])
-            lines = [
-                f"כמות יחידות: {int(r['quantity'])}",
-                f"סה״כ מטרים: {meters:.1f} מ׳",
-            ]
-            if price_per_meter > 0:
-                lines.append(f"עלות: ₪{meters * price_per_meter:,.2f}")
-            card(f"{int(r['length'])} {MM}", lines)
+        if "monthly_price_val" not in st.session_state:
+            st.session_state.monthly_price_val = 0.0
+        price_m = st.number_input("מחיר לכל מטר סנטף (₪)", min_value=0.0,
+                                   value=st.session_state.monthly_price_val,
+                                   step=0.5, format="%.2f", key="cons_price")
+        st.session_state.monthly_price_val = price_m
 
-        # ── WhatsApp ──
-        st.divider()
-        st.markdown('<div class="section-title">💬 שלח בווטסאפ</div>', unsafe_allow_html=True)
-        wa_lines_m = [f"📅 דוח חודשי סנטפים — Trellidor\nתקופה: {d1.strftime('%d/%m/%Y')} עד {d2.strftime('%d/%m/%Y')}\n"]
-        wa_lines_m.append(f"סה\"כ יחידות: {total_qty}")
-        wa_lines_m.append(f"סה\"כ מטרים: {total_meters:.1f} מ'")
-        if total_cost is not None:
-            wa_lines_m.append(f"סה\"כ עלות: ₪{total_cost:,.2f}")
-        wa_lines_m.append("")
-        for _, r in report.iterrows():
-            meters = float(r["meters"])
-            line_wa = f"• {int(r['length'])} מ\"מ — {int(r['quantity'])} יחידות, {meters:.1f} מ'"
-            if price_per_meter > 0:
-                line_wa += f", ₪{meters * price_per_meter:,.2f}"
-            wa_lines_m.append(line_wa)
-        wa_url_m = f"https://wa.me/?text={quote(chr(10).join(wa_lines_m))}"
-        st.link_button("💬 שלח דוח בווטסאפ", wa_url_m)
+        cons_movements = safe_data(
+            supabase.table("santaf_movements").select("*")
+            .eq("type", "OUT").gte("date", str(d1c)).lte("date", str(d2c)).execute()
+        )
 
-        # ── Email ──
-        st.divider()
-        st.markdown('<div class="section-title">📧 שלח דוח חודשי במייל</div>', unsafe_allow_html=True)
-        email_history_m = load_email_history()
-        if email_history_m:
-            options_m = email_history_m + ["✏️ הזן כתובת חדשה"]
-            selected_m = st.selectbox("כתובת מייל נמען", options_m, key="monthly_email_select")
-            if selected_m == "✏️ הזן כתובת חדשה":
-                recipient_m = text_input_clear("הכנס כתובת מייל", key="monthly_email_new")
-            else:
-                recipient_m = selected_m
+        if not cons_movements:
+            st.info("אין ניפוקי סנטפים בטווח התאריכים.")
         else:
-            recipient_m = text_input_clear("כתובת מייל נמען", key="monthly_email_recipient")
+            df_c = pd.DataFrame(cons_movements)
+            df_c["meters"] = df_c["length"].astype(float) / 1000 * df_c["quantity"].astype(float)
+            rpt_c = df_c.groupby("length").agg(quantity=("quantity","sum"), meters=("meters","sum")).reset_index()
 
-        if st.button("📧 שלח דוח חודשי", key="btn_send_monthly_email"):
-            if not recipient_m or not recipient_m.strip():
-                st.error("יש להזין כתובת מייל נמען.")
-            else:
-                now_str_m = datetime.now().strftime("%d/%m/%Y %H:%M")
-                period_str = f"{d1.strftime('%d/%m/%Y')} עד {d2.strftime('%d/%m/%Y')}"
-                table_rows_m = ""
-                for _, r in report.iterrows():
-                    meters_r = float(r["meters"])
-                    cost_cell = f"₪{meters_r * price_per_meter:,.2f}" if price_per_meter > 0 else "—"
-                    table_rows_m += f"""
-                    <tr>
-                        <td style="padding:10px 14px; text-align:center; font-weight:bold;">{int(r['length'])} מ"מ</td>
-                        <td style="padding:10px 14px; text-align:center;">{int(r['quantity'])}</td>
-                        <td style="padding:10px 14px; text-align:center;">{meters_r:.1f} מ'</td>
-                        <td style="padding:10px 14px; text-align:center;">{cost_cell}</td>
-                    </tr>"""
-                total_cost_str = f"₪{total_cost:,.2f}" if total_cost is not None else "—"
-                html_body_m = f"""
-                <html dir="rtl">
-                <body style="margin:0; padding:20px; background:#f0f0f0; font-family:Arial,sans-serif; direction:rtl;">
-                  <div style="max-width:640px; margin:0 auto; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.12);">
-                    <div style="background:#2c3e50; padding:22px 28px;">
-                      <h1 style="color:#ffffff; margin:0; font-size:22px;">📅 דוח חודשי סנטפים</h1>
-                      <p style="color:#bdc3c7; margin:8px 0 0; font-size:13px;">תקופה: {period_str} &nbsp;|&nbsp; נוצר: {now_str_m}</p>
-                    </div>
-                    <div style="padding:28px;">
-                      <div style="display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
-                        <div style="background:#f8f9fa; border-radius:8px; padding:14px 20px; flex:1; min-width:120px; text-align:center;">
-                          <div style="font-size:22px; font-weight:bold; color:#2c3e50;">{total_qty}</div>
-                          <div style="font-size:12px; color:#666;">סה"כ יחידות</div>
+            total_qty_c = int(rpt_c["quantity"].sum())
+            total_m_c   = rpt_c["meters"].sum()
+            total_cost_c = total_m_c * price_m if price_m > 0 else None
+            period_c = f"{d1c.strftime('%d/%m/%Y')} עד {d2c.strftime('%d/%m/%Y')}"
+
+            # Summary metrics
+            cols_m = st.columns(3 if total_cost_c is not None else 2)
+            cols_m[0].metric("סה״כ יחידות", total_qty_c)
+            cols_m[1].metric("סה״כ מטרים", f"{total_m_c:.1f} מ׳")
+            if total_cost_c is not None:
+                cols_m[2].metric("סה״כ עלות", f"₪{total_cost_c:,.2f}")
+
+            # Display table
+            cons_html_rows = ""
+            for _, r in rpt_c.iterrows():
+                pct  = int(r["quantity"]) / total_qty_c * 100 if total_qty_c else 0
+                mtr  = float(r["meters"])
+                cost_cell = f"₪{mtr * price_m:,.2f}" if price_m > 0 else "—"
+                cons_html_rows += f"""<tr>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold'>{int(r['length'])} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center'>{int(r['quantity'])}</td>
+                  <td style='padding:9px 14px;text-align:center'>{mtr:.1f} מ'</td>
+                  <td style='padding:9px 14px;text-align:center'>{cost_cell}</td>
+                  <td style='padding:9px 14px;text-align:center'>{pct:.1f}%</td>
+                </tr>"""
+
+            st.markdown(f"""
+            <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd;margin-top:12px'>
+              <thead><tr style='background:#2c3e50;color:#fff'>
+                <th style='padding:10px 14px;text-align:center'>מידה</th>
+                <th style='padding:10px 14px;text-align:center'>יחידות</th>
+                <th style='padding:10px 14px;text-align:center'>מטרים</th>
+                <th style='padding:10px 14px;text-align:center'>עלות</th>
+                <th style='padding:10px 14px;text-align:center'>אחוז</th>
+              </tr></thead>
+              <tbody>{cons_html_rows}</tbody>
+            </table>
+            """, unsafe_allow_html=True)
+
+            st.divider()
+
+            # WhatsApp
+            wa_c = [f"📊 *דוח צריכת סנטפים — Trellidor*", f"תקופה: {period_c}", ""]
+            wa_c.append(f"סה\"כ יחידות: {total_qty_c}  |  מטרים: {total_m_c:.1f} מ'" + (f"  |  עלות: ₪{total_cost_c:,.2f}" if total_cost_c else ""))
+            wa_c.append("")
+            wa_c.append(f"{'מידה':<12}| {'יחידות':>7} | {'מטרים':>7} | {'עלות':>9} | אחוז")
+            wa_c.append(f"{'-'*12}|{'-'*9}|{'-'*9}|{'-'*11}|-----")
+            for _, r in rpt_c.iterrows():
+                pct = int(r["quantity"]) / total_qty_c * 100 if total_qty_c else 0
+                mtr = float(r["meters"])
+                cost_s = f"₪{mtr*price_m:,.0f}" if price_m > 0 else "—"
+                mid = f"{int(r['length'])} {MM}"
+                wa_c.append(f"{mid:<12}| {int(r['quantity']):>7} | {mtr:>6.1f} מ' | {cost_s:>9} | {pct:.0f}%")
+            wa_url_c = f"https://wa.me/?text={quote(chr(10).join(wa_c))}"
+            st.link_button("💬 שלח בווטסאפ", wa_url_c)
+
+            # Email
+            st.divider()
+            st.markdown('<div class="section-title">📧 שלח במייל</div>', unsafe_allow_html=True)
+            recipient_c = _email_widget("cons")
+            if st.button("📧 שלח דוח צריכה", key="btn_cons_email"):
+                if not recipient_c or not recipient_c.strip():
+                    st.error("יש להזין כתובת מייל נמען.")
+                else:
+                    now_c = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    email_rows_c = ""
+                    for _, r in rpt_c.iterrows():
+                        pct  = int(r["quantity"]) / total_qty_c * 100 if total_qty_c else 0
+                        mtr  = float(r["meters"])
+                        cost_cell = f"₪{mtr*price_m:,.2f}" if price_m > 0 else "—"
+                        email_rows_c += f"""<tr>
+                          <td style='padding:9px 14px;text-align:center;font-weight:bold'>{int(r['length'])} מ&quot;מ</td>
+                          <td style='padding:9px 14px;text-align:center'>{int(r['quantity'])}</td>
+                          <td style='padding:9px 14px;text-align:center'>{mtr:.1f} מ'</td>
+                          <td style='padding:9px 14px;text-align:center'>{cost_cell}</td>
+                          <td style='padding:9px 14px;text-align:center'>{pct:.1f}%</td>
+                        </tr>"""
+                    total_cost_str_c = f"₪{total_cost_c:,.2f}" if total_cost_c else "—"
+                    html_c = f"""<html dir="rtl"><body style="margin:0;padding:20px;background:#f0f0f0;font-family:Arial,sans-serif;direction:rtl">
+                    <div style="max-width:660px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.12)">
+                      <div style="background:#2c3e50;padding:22px 28px"><h1 style="color:#fff;margin:0;font-size:22px">📊 דוח צריכת סנטפים</h1>
+                      <p style="color:#bdc3c7;margin:8px 0 0;font-size:13px">תקופה: {period_c} | נוצר: {now_c}</p></div>
+                      <div style="padding:28px">
+                        <div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap">
+                          <div style="background:#f8f9fa;border-radius:8px;padding:12px 18px;flex:1;min-width:110px;text-align:center"><div style="font-size:20px;font-weight:bold;color:#2c3e50">{total_qty_c}</div><div style="font-size:11px;color:#666">יחידות</div></div>
+                          <div style="background:#f8f9fa;border-radius:8px;padding:12px 18px;flex:1;min-width:110px;text-align:center"><div style="font-size:20px;font-weight:bold;color:#2c3e50">{total_m_c:.1f} מ'</div><div style="font-size:11px;color:#666">מטרים</div></div>
+                          <div style="background:#f8f9fa;border-radius:8px;padding:12px 18px;flex:1;min-width:110px;text-align:center"><div style="font-size:20px;font-weight:bold;color:#2c3e50">{total_cost_str_c}</div><div style="font-size:11px;color:#666">עלות</div></div>
                         </div>
-                        <div style="background:#f8f9fa; border-radius:8px; padding:14px 20px; flex:1; min-width:120px; text-align:center;">
-                          <div style="font-size:22px; font-weight:bold; color:#2c3e50;">{total_meters:.1f} מ'</div>
-                          <div style="font-size:12px; color:#666;">סה"כ מטרים</div>
-                        </div>
-                        <div style="background:#f8f9fa; border-radius:8px; padding:14px 20px; flex:1; min-width:120px; text-align:center;">
-                          <div style="font-size:22px; font-weight:bold; color:#2c3e50;">{total_cost_str}</div>
-                          <div style="font-size:12px; color:#666;">סה"כ עלות</div>
-                        </div>
-                      </div>
-                      <table style="width:100%; border-collapse:collapse; font-size:14px; border:1px solid #ddd;">
-                        <thead>
-                          <tr style="background:#2c3e50; color:#ffffff;">
-                            <th style="padding:11px 14px; text-align:center;">מידה</th>
-                            <th style="padding:11px 14px; text-align:center;">יחידות</th>
-                            <th style="padding:11px 14px; text-align:center;">מטרים</th>
-                            <th style="padding:11px 14px; text-align:center;">עלות</th>
-                          </tr>
-                        </thead>
-                        <tbody>{table_rows_m}</tbody>
-                      </table>
-                    </div>
-                    <div style="background:#f5f5f5; padding:16px 28px; text-align:center; font-size:12px; color:#999; border-top:1px solid #e0e0e0;">
-                      Trellidor Israel &nbsp;|&nbsp; מערכת ניהול מלאי לדים וסנטפים
-                    </div>
-                  </div>
-                </body>
-                </html>"""
-                msg_m = MIMEMultipart("alternative")
-                msg_m["Subject"] = f"דוח חודשי סנטפים — {period_str}"
-                msg_m["From"] = SENDER_EMAIL
-                msg_m["To"] = recipient_m.strip()
-                msg_m.attach(MIMEText(html_body_m, "html", "utf-8"))
-                try:
-                    with st.spinner("שולח מייל..."):
-                        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                            server.starttls()
-                            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-                            server.sendmail(SENDER_EMAIL, recipient_m.strip(), msg_m.as_string())
-                    save_email_to_history(recipient_m.strip())
-                    st.success(f"✅ המייל נשלח בהצלחה אל {recipient_m.strip()}")
-                except Exception as e:
-                    st.error(f"שגיאה בשליחת מייל: {e}")
+                        <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd">
+                          <thead><tr style="background:#2c3e50;color:#fff">
+                            <th style="padding:10px 14px;text-align:center">מידה</th>
+                            <th style="padding:10px 14px;text-align:center">יחידות</th>
+                            <th style="padding:10px 14px;text-align:center">מטרים</th>
+                            <th style="padding:10px 14px;text-align:center">עלות</th>
+                            <th style="padding:10px 14px;text-align:center">אחוז</th>
+                          </tr></thead>
+                          <tbody>{email_rows_c}</tbody></table></div>
+                      <div style="background:#f5f5f5;padding:14px 28px;text-align:center;font-size:12px;color:#999;border-top:1px solid #e0e0e0">Trellidor Israel | מערכת ניהול מלאי</div>
+                    </div></body></html>"""
+                    try:
+                        with st.spinner("שולח..."):
+                            _send_report_email(f"דוח צריכת סנטפים — {period_c}", html_c, recipient_c.strip())
+                        save_email_to_history(recipient_c.strip())
+                        st.success(f"✅ נשלח אל {recipient_c.strip()}")
+                    except Exception as e:
+                        st.error(f"שגיאה: {e}")
 
-elif page == "📊 דוח צריכת סנטפים":
-    st.markdown("""<div class="page-banner"><h2>📊 דוח צריכת סנטפים</h2><p>ניתוח צריכה לפי טווח תאריכים</p></div>""", unsafe_allow_html=True)
+    # ══════════════════════════════════════════════════════
+    # TAB 3 — דוח הזמנה
+    # ══════════════════════════════════════════════════════
+    with tab_order:
+        order_rows = get_santaf_rows()
+        low_rows = [r for r in order_rows if int(r.get("quantity") or 0) < int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)]
 
-    col1, col2 = st.columns(2)
-    with col1:
-        d1 = st.date_input("מתאריך", value=date.today(), key="report_from")
-    with col2:
-        d2 = st.date_input("עד תאריך", value=date.today(), key="report_to")
-
-    movements = safe_data(
-        supabase.table("santaf_movements")
-        .select("*")
-        .eq("type", "OUT")
-        .gte("date", str(d1))
-        .lte("date", str(d2))
-        .execute()
-    )
-
-    if not movements:
-        st.info("אין צריכת סנטפים בטווח התאריכים.")
-    else:
-        df = pd.DataFrame(movements)
-        report = df.groupby("length")["quantity"].sum().reset_index()
-        total = int(report["quantity"].sum())
-
-        st.metric("סה״כ סנטפים שנופקו", total)
-
-        for _, r in report.iterrows():
-            percent = (int(r["quantity"]) / total) * 100 if total else 0
-            card(
-                f"{int(r['length'])} {MM}",
-                [
-                    f"כמות: {int(r['quantity'])}",
-                    f"אחוז מכלל הצריכה: {percent:.1f}%",
-                ]
-            )
-
-        # ── WhatsApp ──
-        st.divider()
-        st.markdown('<div class="section-title">💬 שלח בווטסאפ</div>', unsafe_allow_html=True)
-        wa_lines_c = [f"📊 דוח צריכת סנטפים — Trellidor\nתקופה: {d1.strftime('%d/%m/%Y')} עד {d2.strftime('%d/%m/%Y')}\nסה\"כ יחידות: {total}\n"]
-        for _, r in report.iterrows():
-            percent = (int(r["quantity"]) / total) * 100 if total else 0
-            wa_lines_c.append(f"• {int(r['length'])} מ\"מ — {int(r['quantity'])} יחידות ({percent:.1f}%)")
-        wa_url_c = f"https://wa.me/?text={quote(chr(10).join(wa_lines_c))}"
-        st.link_button("💬 שלח דוח בווטסאפ", wa_url_c)
-
-        # ── Email ──
-        st.divider()
-        st.markdown('<div class="section-title">📧 שלח דוח צריכה במייל</div>', unsafe_allow_html=True)
-        email_history_c = load_email_history()
-        if email_history_c:
-            options_c = email_history_c + ["✏️ הזן כתובת חדשה"]
-            selected_c = st.selectbox("כתובת מייל נמען", options_c, key="consumption_email_select")
-            if selected_c == "✏️ הזן כתובת חדשה":
-                recipient_c = text_input_clear("הכנס כתובת מייל", key="consumption_email_new")
-            else:
-                recipient_c = selected_c
+        if not low_rows:
+            st.success("כל המידות מעל המינימום — אין צורך בהזמנה.")
         else:
-            recipient_c = text_input_clear("כתובת מייל נמען", key="consumption_email_recipient")
+            now_ord = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-        if st.button("📧 שלח דוח צריכה", key="btn_send_consumption_email"):
-            if not recipient_c or not recipient_c.strip():
-                st.error("יש להזין כתובת מייל נמען.")
-            else:
-                now_str_c = datetime.now().strftime("%d/%m/%Y %H:%M")
-                period_str_c = f"{d1.strftime('%d/%m/%Y')} עד {d2.strftime('%d/%m/%Y')}"
-                table_rows_c = ""
-                for _, r in report.iterrows():
-                    percent_r = (int(r["quantity"]) / total) * 100 if total else 0
-                    table_rows_c += f"""
-                    <tr>
-                        <td style="padding:10px 14px; text-align:center; font-weight:bold;">{int(r['length'])} מ"מ</td>
-                        <td style="padding:10px 14px; text-align:center;">{int(r['quantity'])}</td>
-                        <td style="padding:10px 14px; text-align:center;">{percent_r:.1f}%</td>
-                    </tr>"""
-                html_body_c = f"""
-                <html dir="rtl">
-                <body style="margin:0; padding:20px; background:#f0f0f0; font-family:Arial,sans-serif; direction:rtl;">
-                  <div style="max-width:620px; margin:0 auto; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.12);">
-                    <div style="background:#1a6b3c; padding:22px 28px;">
-                      <h1 style="color:#ffffff; margin:0; font-size:22px;">📊 דוח צריכת סנטפים</h1>
-                      <p style="color:#a8d5b8; margin:8px 0 0; font-size:13px;">תקופה: {period_str_c} &nbsp;|&nbsp; נוצר: {now_str_c}</p>
-                    </div>
-                    <div style="padding:28px;">
-                      <div style="background:#f8f9fa; border-radius:8px; padding:14px 20px; text-align:center; margin-bottom:20px;">
-                        <div style="font-size:26px; font-weight:bold; color:#1a6b3c;">{total}</div>
-                        <div style="font-size:13px; color:#666;">סה"כ יחידות שנופקו</div>
-                      </div>
-                      <table style="width:100%; border-collapse:collapse; font-size:14px; border:1px solid #ddd;">
-                        <thead>
-                          <tr style="background:#1a6b3c; color:#ffffff;">
-                            <th style="padding:11px 14px; text-align:center;">מידה</th>
-                            <th style="padding:11px 14px; text-align:center;">כמות</th>
-                            <th style="padding:11px 14px; text-align:center;">אחוז</th>
-                          </tr>
-                        </thead>
-                        <tbody>{table_rows_c}</tbody>
-                      </table>
-                    </div>
-                    <div style="background:#f5f5f5; padding:16px 28px; text-align:center; font-size:12px; color:#999; border-top:1px solid #e0e0e0;">
-                      Trellidor Israel &nbsp;|&nbsp; מערכת ניהול מלאי לדים וסנטפים
-                    </div>
-                  </div>
-                </body>
-                </html>"""
-                msg_c = MIMEMultipart("alternative")
-                msg_c["Subject"] = f"דוח צריכת סנטפים — {period_str_c}"
-                msg_c["From"] = SENDER_EMAIL
-                msg_c["To"] = recipient_c.strip()
-                msg_c.attach(MIMEText(html_body_c, "html", "utf-8"))
-                try:
-                    with st.spinner("שולח מייל..."):
-                        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                            server.starttls()
-                            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-                            server.sendmail(SENDER_EMAIL, recipient_c.strip(), msg_c.as_string())
-                    save_email_to_history(recipient_c.strip())
-                    st.success(f"✅ המייל נשלח בהצלחה אל {recipient_c.strip()}")
-                except Exception as e:
-                    st.error(f"שגיאה בשליחת מייל: {e}")
+            # Display table
+            ord_html_rows = ""
+            for r in low_rows:
+                qty  = int(r.get("quantity") or 0)
+                minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                gap  = minq - qty
+                ord_html_rows += f"""<tr>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold'>{r.get('length')} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#cc0000'>{qty}</td>
+                  <td style='padding:9px 14px;text-align:center'>{minq}</td>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#c0392b'>{gap}</td>
+                </tr>"""
+
+            st.markdown(f"""
+            <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd'>
+              <thead><tr style='background:#c0392b;color:#fff'>
+                <th style='padding:10px 14px;text-align:center'>מידה</th>
+                <th style='padding:10px 14px;text-align:center'>מלאי נוכחי</th>
+                <th style='padding:10px 14px;text-align:center'>מינימום</th>
+                <th style='padding:10px 14px;text-align:center'>כמה להזמין</th>
+              </tr></thead>
+              <tbody>{ord_html_rows}</tbody>
+            </table>
+            """, unsafe_allow_html=True)
+
+            st.divider()
+
+            # WhatsApp
+            wa_o = [f"📋 *דוח הזמנה — Trellidor*", f"תאריך: {now_ord}", ""]
+            wa_o.append(f"{'מידה':<12}| {'מלאי':>6} | {'מינימום':>8} | להזמין")
+            wa_o.append(f"{'-'*12}|{'-'*8}|{'-'*10}|--------")
+            for r in low_rows:
+                qty  = int(r.get("quantity") or 0)
+                minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                mid  = f"{r.get('length')} {MM}"
+                wa_o.append(f"{mid:<12}| {qty:>6} | {minq:>8} | {minq-qty}")
+            wa_url_o = f"https://wa.me/?text={quote(chr(10).join(wa_o))}"
+            st.link_button("💬 שלח בווטסאפ", wa_url_o)
+
+            # Email
+            st.divider()
+            st.markdown('<div class="section-title">📧 שלח במייל</div>', unsafe_allow_html=True)
+            recipient_o = _email_widget("order")
+            if st.button("📧 שלח דוח הזמנה", key="btn_order_email"):
+                if not recipient_o or not recipient_o.strip():
+                    st.error("יש להזין כתובת מייל נמען.")
+                else:
+                    email_rows_o = ""
+                    for r in low_rows:
+                        qty  = int(r.get("quantity") or 0)
+                        minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                        email_rows_o += f"""<tr>
+                          <td style='padding:9px 14px;text-align:center;font-weight:bold'>{r.get('length')} מ&quot;מ</td>
+                          <td style='padding:9px 14px;text-align:center;color:#cc0000'>{qty}</td>
+                          <td style='padding:9px 14px;text-align:center'>{minq}</td>
+                          <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#c0392b'>{minq-qty}</td>
+                        </tr>"""
+                    html_o = f"""<html dir="rtl"><body style="margin:0;padding:20px;background:#f0f0f0;font-family:Arial,sans-serif;direction:rtl">
+                    <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.12)">
+                      <div style="background:#c0392b;padding:22px 28px"><h1 style="color:#fff;margin:0;font-size:22px">📋 דוח הזמנה — סנטפים</h1>
+                      <p style="color:#fdd;margin:8px 0 0;font-size:13px">תאריך: {now_ord}</p></div>
+                      <div style="padding:28px">
+                        <p style="font-size:13px;color:#555;margin:0 0 14px">להלן המידות שנמאי בהן נמוך מהמינימום ויש להזמינן:</p>
+                        <table style="width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd">
+                          <thead><tr style="background:#c0392b;color:#fff">
+                            <th style="padding:10px 14px;text-align:center">מידה</th>
+                            <th style="padding:10px 14px;text-align:center">מלאי נוכחי</th>
+                            <th style="padding:10px 14px;text-align:center">מינימום</th>
+                            <th style="padding:10px 14px;text-align:center">כמה להזמין</th>
+                          </tr></thead>
+                          <tbody>{email_rows_o}</tbody></table></div>
+                      <div style="background:#f5f5f5;padding:14px 28px;text-align:center;font-size:12px;color:#999;border-top:1px solid #e0e0e0">Trellidor Israel | מערכת ניהול מלאי</div>
+                    </div></body></html>"""
+                    try:
+                        with st.spinner("שולח..."):
+                            _send_report_email(f"דוח הזמנה — סנטפים — {now_ord}", html_o, recipient_o.strip())
+                        save_email_to_history(recipient_o.strip())
+                        st.success(f"✅ נשלח אל {recipient_o.strip()}")
+                    except Exception as e:
+                        st.error(f"שגיאה: {e}")
