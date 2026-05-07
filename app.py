@@ -986,21 +986,21 @@ elif page == "📋 דוחות":
                 cost_cell = f"₪{mtr * price_m:,.2f}" if price_m > 0 else "—"
                 row_bg_c = "#f0f4f8" if int(r['length']) % 2 == 0 else "#ffffff"
                 cons_html_rows += f"""<tr style='background:{row_bg_c}'>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a;background:{row_bg_c}'>{int(r['length'])} {MM}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{int(r['quantity'])}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{mtr:.1f} מ'</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{cost_cell}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c}'>{pct:.1f}%</td>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a;background:{row_bg_c};white-space:nowrap'>{int(r['length'])} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c};white-space:nowrap'>{int(r['quantity'])}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c};white-space:nowrap'>{mtr:.1f} מ'</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c};white-space:nowrap'>{cost_cell}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:{row_bg_c};white-space:nowrap'>{pct:.1f}%</td>
                 </tr>"""
 
             st.markdown(f"""
-            <table style='width:100%;border-collapse:collapse;font-size:14px;border:1px solid #ddd;margin-top:12px'>
+            <table style='border-collapse:collapse;font-size:14px;border:1px solid #ddd;margin-top:12px'>
               <thead><tr style='background:#2c3e50;color:#fff'>
-                <th style='padding:10px 14px;text-align:center'>מידה</th>
-                <th style='padding:10px 14px;text-align:center'>יחידות</th>
-                <th style='padding:10px 14px;text-align:center'>מטרים</th>
-                <th style='padding:10px 14px;text-align:center'>עלות</th>
-                <th style='padding:10px 14px;text-align:center'>אחוז</th>
+                <th style='padding:10px 14px;text-align:center;white-space:nowrap'>מידה</th>
+                <th style='padding:10px 14px;text-align:center;white-space:nowrap'>יחידות</th>
+                <th style='padding:10px 14px;text-align:center;white-space:nowrap'>מטרים</th>
+                <th style='padding:10px 14px;text-align:center;white-space:nowrap'>עלות</th>
+                <th style='padding:10px 14px;text-align:center;white-space:nowrap'>אחוז</th>
               </tr></thead>
               <tbody>{cons_html_rows}</tbody>
             </table>
