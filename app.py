@@ -783,6 +783,96 @@ elif page == "🟫 מלאי סנטפים":
             warning=quantity < min_quantity
         )
 
+    # ── Send report ──
+    all_rows = get_santaf_rows()
+    if all_rows:
+        st.divider()
+
+        # WhatsApp
+        st.markdown('<div class="section-title">💬 שלח בווטסאפ</div>', unsafe_allow_html=True)
+        now_str_si = datetime.now().strftime("%d/%m/%Y %H:%M")
+        wa_lines_si = [f"🟫 דוח מלאי סנטפים — Trellidor\nתאריך: {now_str_si}\n"]
+        for r in all_rows:
+            qty_si = int(r.get("quantity") or 0)
+            min_si = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+            label_si = f"** {r.get('length')} מ\"מ — {qty_si} יחידות **" if qty_si < min_si else f"{r.get('length')} מ\"מ — {qty_si} יחידות"
+            wa_lines_si.append(f"• {label_si}")
+        wa_url_si = f"https://wa.me/?text={quote(chr(10).join(wa_lines_si))}"
+        st.link_button("💬 שלח דוח מלאי בווטסאפ", wa_url_si)
+
+        # Email
+        st.divider()
+        st.markdown('<div class="section-title">📧 שלח דוח מלאי סנטפים במייל</div>', unsafe_allow_html=True)
+        email_history_si = load_email_history()
+        if email_history_si:
+            options_si = email_history_si + ["✏️ הזן כתובת חדשה"]
+            selected_si = st.selectbox("כתובת מייל נמען", options_si, key="si_email_select")
+            if selected_si == "✏️ הזן כתובת חדשה":
+                recipient_si = text_input_clear("הכנס כתובת מייל", key="si_email_new")
+            else:
+                recipient_si = selected_si
+        else:
+            recipient_si = text_input_clear("כתובת מייל נמען", key="si_email_recipient")
+
+        if st.button("📧 שלח דוח מלאי סנטפים", key="btn_send_si_email"):
+            if not recipient_si or not recipient_si.strip():
+                st.error("יש להזין כתובת מייל נמען.")
+            else:
+                now_str_si2 = datetime.now().strftime("%d/%m/%Y %H:%M")
+                table_rows_si = ""
+                for r in all_rows:
+                    qty_si = int(r.get("quantity") or 0)
+                    min_si = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
+                    is_low = qty_si < min_si
+                    row_bg = "#fff0f0" if is_low else "#ffffff"
+                    qty_cell = f"<strong>** {qty_si} **</strong>" if is_low else str(qty_si)
+                    table_rows_si += f"""
+                    <tr style="background:{row_bg};">
+                        <td style="padding:10px 14px; text-align:center; font-weight:bold;">{r.get('length')} מ"מ</td>
+                        <td style="padding:10px 14px; text-align:center; color:{'#cc0000' if is_low else '#333'};">{qty_cell}</td>
+                    </tr>"""
+                html_body_si = f"""
+                <html dir="rtl">
+                <body style="margin:0; padding:20px; background:#f0f0f0; font-family:Arial,sans-serif; direction:rtl;">
+                  <div style="max-width:580px; margin:0 auto; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.12);">
+                    <div style="background:#5d4037; padding:22px 28px;">
+                      <h1 style="color:#ffffff; margin:0; font-size:22px;">🟫 דוח מלאי סנטפים</h1>
+                      <p style="color:#d7ccc8; margin:8px 0 0; font-size:13px;">תאריך: {now_str_si2}</p>
+                    </div>
+                    <div style="padding:28px;">
+                      <p style="font-size:13px; color:#666; margin-top:0;">מידות המסומנות ב-** נמצאות מתחת לכמות המינימום.</p>
+                      <table style="width:100%; border-collapse:collapse; font-size:14px; border:1px solid #ddd;">
+                        <thead>
+                          <tr style="background:#5d4037; color:#ffffff;">
+                            <th style="padding:11px 14px; text-align:center;">מידה</th>
+                            <th style="padding:11px 14px; text-align:center;">כמות במלאי</th>
+                          </tr>
+                        </thead>
+                        <tbody>{table_rows_si}</tbody>
+                      </table>
+                    </div>
+                    <div style="background:#f5f5f5; padding:16px 28px; text-align:center; font-size:12px; color:#999; border-top:1px solid #e0e0e0;">
+                      Trellidor Israel &nbsp;|&nbsp; מערכת ניהול מלאי לדים וסנטפים
+                    </div>
+                  </div>
+                </body>
+                </html>"""
+                msg_si = MIMEMultipart("alternative")
+                msg_si["Subject"] = f"דוח מלאי סנטפים — {now_str_si2}"
+                msg_si["From"] = SENDER_EMAIL
+                msg_si["To"] = recipient_si.strip()
+                msg_si.attach(MIMEText(html_body_si, "html", "utf-8"))
+                try:
+                    with st.spinner("שולח מייל..."):
+                        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                            server.starttls()
+                            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                            server.sendmail(SENDER_EMAIL, recipient_si.strip(), msg_si.as_string())
+                    save_email_to_history(recipient_si.strip())
+                    st.success(f"✅ המייל נשלח בהצלחה אל {recipient_si.strip()}")
+                except Exception as e:
+                    st.error(f"שגיאה בשליחת מייל: {e}")
+
 elif page == "⚙️ מינימום סנטפים":
     st.markdown("""<div class="page-banner"><h2>⚙️ הגדרת מינימום</h2><p>קביעת כמות מינימום לכל מידת סנטף</p></div>""", unsafe_allow_html=True)
 
