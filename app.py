@@ -1092,11 +1092,11 @@ elif page == "📋 דוחות":
                 qty  = int(r.get("quantity") or 0)
                 minq = int(r.get("min_quantity") or DEFAULT_MIN_SANTAF)
                 gap  = minq - qty
-                ord_html_rows += f"""<tr>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a'>{r.get('length')} {MM}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#cc0000'>{qty}</td>
-                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a'>{minq}</td>
-                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#c0392b'>{gap}</td>
+                ord_html_rows += f"""<tr style='background:#fff8f8'>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#1a1a1a;background:#fff8f8'>{r.get('length')} {MM}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#cc0000;background:#fff8f8'>{qty}</td>
+                  <td style='padding:9px 14px;text-align:center;color:#1a1a1a;background:#fff8f8'>{minq}</td>
+                  <td style='padding:9px 14px;text-align:center;font-weight:bold;color:#c0392b;background:#fff8f8'>{gap}</td>
                 </tr>"""
 
             st.markdown(f"""
