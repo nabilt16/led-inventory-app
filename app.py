@@ -9,6 +9,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from supabase import create_client
 from urllib.parse import quote
+import orders_page
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://gwiieqmawtudoxafnjeg.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3aWllcW1hd3R1ZG94YWZuamVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzkxMDAsImV4cCI6MjA5MzQ1NTEwMH0.v3fxlk30SHNPqyncYB557lLYsk99D50DGsPhJUNkeLk")
@@ -363,10 +364,16 @@ button[kind="secondary"]:hover {
 </style>
 """, unsafe_allow_html=True)
 
-ensure_santaf_lengths()
+try:
+    ensure_santaf_lengths()
+except Exception:
+    st.error("לא ניתן להתחבר למסד הנתונים כרגע. לא בוצע שום שינוי. בדקו חיבור לאינטרנט, "
+             "ושפרויקט Supabase פעיל (לא מושהה), ונסו לרענן.")
+    st.stop()
 
 PAGES = [
     "🏠 דשבורד",
+    "📝 הזמנות",
     "💡 קליטת לדים",
     "💡 ניפוק לדים",
     "💡 מלאי לדים",
@@ -836,6 +843,9 @@ elif page == "⚙️ מינימום סנטפים":
                     st.cache_data.clear()
                     st.success("✅ נשמר.")
                     st.rerun()
+
+elif page == "📝 הזמנות":
+    orders_page.render(supabase, SANTAF_LENGTHS, st.cache_data.clear)
 
 elif page == "📋 דוחות":
     st.markdown("""<div class="page-banner"><h2>📋 דוחות</h2><p>דוחות מלאי, צריכה והזמנה</p></div>""", unsafe_allow_html=True)
