@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from supabase import create_client
 from urllib.parse import quote
 import orders_page
+import auth_gate
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://gwiieqmawtudoxafnjeg.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3aWllcW1hd3R1ZG94YWZuamVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NzkxMDAsImV4cCI6MjA5MzQ1NTEwMH0.v3fxlk30SHNPqyncYB557lLYsk99D50DGsPhJUNkeLk")
@@ -364,6 +365,8 @@ button[kind="secondary"]:hover {
 </style>
 """, unsafe_allow_html=True)
 
+current_user_email = auth_gate.require_login(supabase)
+
 try:
     ensure_santaf_lengths()
 except Exception:
@@ -422,6 +425,8 @@ with st.sidebar:
              on_change=on_desktop_change, label_visibility="collapsed")
     st.divider()
     st.markdown(f"<div style='font-size:11px; color:#8899bb; text-align:center;'>{datetime.now().strftime('%d/%m/%Y %H:%M')}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:11px; color:#8899bb; text-align:center; padding-top:6px;'>{current_user_email}</div>", unsafe_allow_html=True)
+    auth_gate.logout_button(supabase)
 
 page = st.session_state.current_page
 

@@ -128,7 +128,7 @@ def test_receive_requires_location_and_positive_qty():
     assert db.tables["order_lines"][0]["status"] == "ordered"
 
 
-def test_led_stock_failure_releases_claim():
+def test_led_stock_failure_rolls_back_and_retry_works():
     db = santaf_db()
     line = new_line(db, category="LED", item_spec="LED", length_mm=3000, quantity=1)
     db.fail_on[("led_inventory", "insert")] = [1]
@@ -141,51 +141,40 @@ def test_led_stock_failure_releases_claim():
     assert len(db.tables["led_inventory"]) == 1
 
 
-def test_santaf_movement_failure_rolls_back_stock_and_claim():
+def test_failure_after_stock_update_rolls_everything_back():
     db = santaf_db(10)
     line = new_line(db)
     db.fail_on[("santaf_movements", "insert")] = [1]
     with pytest.raises(svc.OrderError):
         svc.receive_line(db, line["id"], 4, "2026-10-20", "B-01", LENGTHS)
     assert db.tables["santaf_inventory"][0]["quantity"] == 10
+    assert db.tables["santaf_movements"] == []
     assert db.tables["order_lines"][0]["status"] == "ordered"
 
 
-def test_cas_detects_concurrent_change():
-    """Another user changes the quantity between our read and our write."""
+def test_connection_error_is_friendly_and_does_not_leak_details():
     db = santaf_db(10)
-    orig_table = db.table
-    state = {"bumped": False}
-
-    def table(name):
-        q = orig_table(name)
-        if name == "santaf_inventory":
-            real = q.execute
-
-            def execute():
-                res = real()
-                if q.op == "select" and not state["bumped"]:
-                    state["bumped"] = True
-                    db.tables["santaf_inventory"][0]["quantity"] = 25  # other user
-                return res
-            q.execute = execute
-        return q
-    db.table = table
-    assert svc._santaf_adjust(db, 2000, 4) == 29        # retried on the fresh value
-    assert db.tables["santaf_inventory"][0]["quantity"] == 29
+    line = new_line(db)
+    db.fail_on[("rpc", "receive_order_line")] = [1]
+    with pytest.raises(svc.OrderError) as e:
+        svc.receive_line(db, line["id"], 4, "2026-10-20", "B-01", LENGTHS)
+    assert "connection reset" not in str(e.value) and "לא בוצע שינוי" in str(e.value)
+    assert db.tables["santaf_inventory"][0]["quantity"] == 10
 
 
-def test_santaf_adjust_never_goes_negative():
-    db = santaf_db(3)
-    with pytest.raises(svc.OrderError):
-        svc._santaf_adjust(db, 2000, -5)
-    assert db.tables["santaf_inventory"][0]["quantity"] == 3
+@pytest.mark.parametrize("raw", [
+    "JWT expired", "{'code': 'PGRST301', 'message': 'JWT expired'}", "permission denied for table x"])
+def test_expired_login_maps_to_relogin_message(raw):
+    msg = svc._rpc_error_message(Exception(raw))
+    assert "התחברו מחדש" in msg
 
 
-def test_missing_santaf_length_row():
+def test_missing_santaf_length_row_is_rejected_without_change():
     db = santaf_db()
+    line = new_line(db, length_mm=1500, santaf_lengths=[1500, 2000, 3000])   # no inventory row for 1500
     with pytest.raises(svc.OrderError):
-        svc._santaf_adjust(db, 1500, 1)
+        svc.receive_line(db, line["id"], 4, "2026-10-20", "A-01", LENGTHS)
+    assert db.tables["order_lines"][0]["status"] == "ordered"
 
 
 # ---------- cancel / coordination ----------

@@ -4,9 +4,12 @@ Pure Python, no Streamlit imports, so it can be unit-tested with a fake client.
 
 Rules:
 - Registering an order line NEVER changes physical stock.
-- Only receive_line() adds stock, once per line (claimed atomically via a
-  conditional UPDATE), and it rolls the claim back if the stock write fails.
+- Only receive_line() adds stock, and it does so by calling the database function
+  public.receive_order_line (migrations/001), which runs the whole receipt in ONE
+  transaction with a row lock: a repeated or concurrent call for the same line
+  fails without touching stock, and any failure rolls everything back.
 """
+import re
 from datetime import date, datetime, timezone
 
 TABLE = "order_lines"
@@ -121,14 +124,6 @@ def search_lines(client, order_number=None, status=None, category=None,
     return res.data or []
 
 
-def _get_line(client, line_id):
-    res = client.table(TABLE).select("*").eq("id", line_id).limit(1).execute()
-    rows = res.data or []
-    if not rows:
-        raise OrderError("שורת ההזמנה לא נמצאה.")
-    return rows[0]
-
-
 def update_coordination_date(client, line_id, new_date):
     client.table(TABLE).update({
         "coordination_date": _iso(new_date),
@@ -148,37 +143,26 @@ def cancel_line(client, line_id):
         raise OrderError("לא ניתן לבטל: השורה כבר התקבלה, בוטלה או אינה קיימת.")
 
 
-def _santaf_adjust(client, length, delta):
-    """Compare-and-swap add to santaf_inventory.quantity (guards against races)."""
-    for _ in range(5):
-        res = (
-            client.table("santaf_inventory").select("id,quantity")
-            .eq("length", length).limit(1).execute()
-        )
-        rows = res.data or []
-        if not rows:
-            raise OrderError(f"לא נמצאה שורת מלאי לאורך {length}.")
-        row = rows[0]
-        raw = row.get("quantity")
-        current = int(raw or 0)
-        new_qty = current + delta
-        if new_qty < 0:
-            raise OrderError(f"העדכון יוריד את המלאי מתחת לאפס (אורך {length}).")
-        upd = client.table("santaf_inventory").update({"quantity": new_qty}).eq("id", row["id"])
-        upd = upd.is_("quantity", "null") if raw is None else upd.eq("quantity", current)
-        if upd.execute().data:
-            return new_qty
-    raise OrderError("המלאי עודכן במקביל על ידי משתמש אחר. נסו שוב.")
+_ORDERERR = re.compile(r"ORDERERR:([^'\"}]*)")
+_AUTH_HINTS = ("jwt", "pgrst301", "pgrst302", "401", "permission denied", "42501")
 
 
-def _led_type_label(line):
-    meters = (line.get("length_mm") or 0) / 1000
-    return f"{line.get('item_spec') or ''} {meters:g} מ'".strip()
+def _rpc_error_message(exc):
+    """Map a database/HTTP error to a safe, user-facing Hebrew message."""
+    message = str(getattr(exc, "message", "") or "")
+    text = f"{message} {exc}"
+    found = _ORDERERR.search(message) or _ORDERERR.search(text)
+    if found:
+        return found.group(1).strip()
+    low = text.lower()
+    if any(h in low for h in _AUTH_HINTS):
+        return "ההתחברות פגה או שאין הרשאה. התחברו מחדש ונסו שוב. לא בוצע שינוי במלאי."
+    return "הקליטה נכשלה ולא בוצע שינוי במלאי. נסו שוב."
 
 
 def receive_line(client, line_id, received_qty, received_date, location,
                  santaf_lengths=()):
-    """Confirm a warehouse receipt for an ordered line and add the stock once."""
+    """Confirm a warehouse receipt for an ordered line and add the stock exactly once."""
     try:
         qty = int(received_qty)
     except (TypeError, ValueError):
@@ -190,64 +174,12 @@ def receive_line(client, line_id, received_qty, received_date, location,
         raise OrderError("חובה להזין מיקום אחסון.")
     received_date = _iso(received_date) or _iso(date.today())
 
-    line = _get_line(client, line_id)
-    if line.get("status") != "ordered" or line.get("stock_applied"):
-        raise OrderError("השורה כבר התקבלה או בוטלה. לא בוצע שינוי במלאי.")
-    if line["category"] == "SANTAF" and santaf_lengths and line["length_mm"] not in santaf_lengths:
-        raise OrderError(f"אורך סנטף {line['length_mm']} אינו ברשימת המידות הקיימת.")
-
-    # Claim the line. Only one caller can win this conditional update, which
-    # prevents a double receipt (double click, two users, page re-run).
-    claim = (
-        client.table(TABLE)
-        .update({
-            "status": "received", "stock_applied": True, "received_qty": qty,
-            "received_date": received_date, "storage_location": location,
-            "updated_at": _now(),
-        })
-        .eq("id", line_id).eq("status", "ordered").eq("stock_applied", False)
-        .execute()
-    )
-    if not claim.data:
-        raise OrderError("השורה כבר התקבלה על ידי משתמש אחר. לא בוצע שינוי במלאי.")
-
-    stock_done = False
     try:
-        if line["category"] == "LED":
-            client.table("led_inventory").insert({
-                "order_number": line.get("supplier_order_ref") or line["customer_order_number"],
-                "led_type": _led_type_label(line),
-                "quantity": qty,
-                "notes": f"הזמנת פרגולה {line['customer_order_number']} | מיקום: {location}",
-            }).execute()
-            stock_done = True
-        else:
-            _santaf_adjust(client, line["length_mm"], qty)
-            stock_done = True
-            client.table("santaf_movements").insert({
-                "length": line["length_mm"], "quantity": qty,
-                "type": "IN", "date": received_date,
-            }).execute()
+        res = client.rpc("receive_order_line", {
+            "p_line_id": str(line_id), "p_qty": qty,
+            "p_date": received_date, "p_location": location,
+        }).execute()
     except Exception as exc:
-        if line["category"] == "SANTAF" and stock_done:
-            # Stock was added but the movement log failed: undo the stock add.
-            try:
-                _santaf_adjust(client, line["length_mm"], -qty)
-            except Exception:
-                raise OrderError(
-                    "שגיאה באמצע הקליטה: המלאי עודכן אך היומן לא נשמר, והשחזור נכשל. "
-                    "בדקו ידנית את מלאי הסנטף לפני המשך עבודה."
-                ) from exc
-        _release_claim(client, line_id)
-        if isinstance(exc, OrderError):
-            raise
-        raise OrderError("הקליטה נכשלה ולא בוצע שינוי במלאי. נסו שוב.") from exc
-
-    return _get_line(client, line_id)
-
-
-def _release_claim(client, line_id):
-    client.table(TABLE).update({
-        "status": "ordered", "stock_applied": False, "received_qty": None,
-        "received_date": None, "storage_location": None, "updated_at": _now(),
-    }).eq("id", line_id).execute()
+        raise OrderError(_rpc_error_message(exc)) from exc
+    data = res.data
+    return data[0] if isinstance(data, list) and data else data

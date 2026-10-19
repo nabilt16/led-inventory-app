@@ -200,7 +200,8 @@ def _line_actions(client, line, santaf_lengths, on_stock_change):
                 on_stock_change()
                 st.success("✅ נקלט למלאי.")
                 st.rerun()
-        if st.button("🚫 בטל שורה (לא התקבלה, לא תיכנס למלאי)", key=f"oc_cancel_{lid}"):
+        if st.button("🚫 בטל שורה", key=f"oc_cancel_{lid}",
+                     help="לשורה שלא התקבלה. השורה לא נמחקת ולא נכנסת למלאי."):
             ok, _ = _safe(svc.cancel_line, client, lid)
             if ok:
                 st.rerun()
