@@ -1,10 +1,10 @@
 -- 001_order_lines.sql
--- ADDITIVE ONLY: creates the order_lines table + an atomic receive function.
--- Does not modify led_inventory, santaf_inventory or santaf_movements (it only
--- INSERTs/UPDATEs them later, when a user confirms a physical receipt).
--- Run manually in the SQL Editor of project "pergola-system" ONLY, after
--- running ops/audit_readonly.sql and reviewing its output.
+-- ADDITIVE ONLY: creates app_users (approved-user allowlist), order_lines and the
+-- atomic receive function. Does not modify led_inventory, santaf_inventory,
+-- santaf_movements or leds_inventory, and does not change anyone's access to them.
+-- Run manually in the SQL Editor of project "pergola-system" ONLY.
 -- Everything runs in one transaction: if any step fails, nothing is applied.
+-- Production audit (PostgreSQL 17.6) was checked against this file.
 
 BEGIN;
 
@@ -28,7 +28,10 @@ BEGIN
     RAISE EXCEPTION 'ABORT: expected columns missing (wrong project or schema changed): %', missing;
   END IF;
 
-  -- if an order_lines table already exists it must be ours, otherwise abort
+  IF to_regclass('auth.users') IS NULL OR to_regprocedure('auth.uid()') IS NULL THEN
+    RAISE EXCEPTION 'ABORT: Supabase auth schema not found (auth.users / auth.uid())';
+  END IF;
+
   IF to_regclass('public.order_lines') IS NOT NULL AND (
        SELECT count(*) FROM information_schema.columns
        WHERE table_schema='public' AND table_name='order_lines'
@@ -36,9 +39,37 @@ BEGIN
                              'status','stock_applied','storage_location')) <> 7 THEN
     RAISE EXCEPTION 'ABORT: a different public.order_lines table already exists';
   END IF;
+  IF to_regclass('public.app_users') IS NOT NULL AND (
+       SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='app_users'
+         AND column_name IN ('user_id','email','role','active')) <> 4 THEN
+    RAISE EXCEPTION 'ABORT: a different public.app_users table already exists';
+  END IF;
 END $$;
 
--- 1. Table ---------------------------------------------------------------------
+-- 1. Approved-user allowlist ----------------------------------------------------
+-- A logged-in account has NO access to inventory data unless it is listed here
+-- and active. Only the project owner (SQL Editor) can add or change rows: the
+-- table is not reachable through the API by anon or authenticated.
+CREATE TABLE IF NOT EXISTS public.app_users (
+  user_id    uuid        PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
+  email      text        NOT NULL,
+  role       text        NOT NULL DEFAULT 'warehouse' CHECK (role IN ('admin', 'warehouse')),
+  active     boolean     NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.app_users FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.is_approved_user() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$ SELECT EXISTS (SELECT 1 FROM public.app_users WHERE user_id = auth.uid() AND active) $$;
+
+REVOKE ALL ON FUNCTION public.is_approved_user() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_approved_user() TO authenticated;
+
+-- 2. Order lines ------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.order_lines (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   customer_order_number text        NOT NULL CHECK (length(btrim(customer_order_number)) > 0),
@@ -67,30 +98,34 @@ CREATE INDEX IF NOT EXISTS order_lines_order_idx  ON public.order_lines (custome
 CREATE INDEX IF NOT EXISTS order_lines_coord_idx  ON public.order_lines (coordination_date);
 CREATE INDEX IF NOT EXISTS order_lines_status_idx ON public.order_lines (status);
 
--- 2. Access: logged-in users only (role "authenticated"). NO anonymous access,
---    NO delete for anyone. -----------------------------------------------------
+-- Access: only approved, logged-in users. NO anonymous access, NO delete for anyone.
 ALTER TABLE public.order_lines ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS order_lines_anon_select ON public.order_lines;
-DROP POLICY IF EXISTS order_lines_anon_insert ON public.order_lines;
-DROP POLICY IF EXISTS order_lines_anon_update ON public.order_lines;
-DROP POLICY IF EXISTS order_lines_auth_select ON public.order_lines;
-DROP POLICY IF EXISTS order_lines_auth_insert ON public.order_lines;
-DROP POLICY IF EXISTS order_lines_auth_update ON public.order_lines;
-CREATE POLICY order_lines_auth_select ON public.order_lines FOR SELECT TO authenticated USING (true);
-CREATE POLICY order_lines_auth_insert ON public.order_lines FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY order_lines_auth_update ON public.order_lines FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT policyname FROM pg_policies
+           WHERE schemaname = 'public' AND tablename = 'order_lines'
+  LOOP
+    EXECUTE format('DROP POLICY %I ON public.order_lines', r.policyname);
+  END LOOP;
+END $$;
+CREATE POLICY order_lines_select ON public.order_lines FOR SELECT TO authenticated
+  USING (public.is_approved_user());
+CREATE POLICY order_lines_insert ON public.order_lines FOR INSERT TO authenticated
+  WITH CHECK (public.is_approved_user());
+CREATE POLICY order_lines_update ON public.order_lines FOR UPDATE TO authenticated
+  USING (public.is_approved_user()) WITH CHECK (public.is_approved_user());
 
-REVOKE ALL ON public.order_lines FROM PUBLIC, anon;
+REVOKE ALL ON public.order_lines FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.order_lines TO authenticated;
 
 -- 3. Atomic warehouse receipt ----------------------------------------------------
 -- One transaction: lock the line, check it is still 'ordered', add the stock,
 -- write the movement, mark the line received. A second call (double click, two
 -- users, retry) finds status <> 'ordered' and fails WITHOUT touching stock.
--- SECURITY DEFINER so it works regardless of the current policies on the legacy
--- tables (before or after 002). Access control is the EXECUTE grant below:
--- only logged-in users ("authenticated") may call it; anon cannot.
+-- SECURITY DEFINER (bypasses RLS), so it checks approval itself; EXECUTE is
+-- granted only to logged-in users and revoked from anon.
 CREATE OR REPLACE FUNCTION public.receive_order_line(
   p_line_id  uuid,
   p_qty      integer,
@@ -106,6 +141,9 @@ DECLARE
   moved integer;
   d     date := coalesce(p_date, current_date);
 BEGIN
+  IF NOT public.is_approved_user() THEN
+    RAISE EXCEPTION 'ORDERERR:אין הרשאה לבצע פעולה זו. פנו למנהל המערכת.';
+  END IF;
   IF p_qty IS NULL OR p_qty <= 0 THEN
     RAISE EXCEPTION 'ORDERERR:הכמות שהתקבלה חייבת להיות גדולה מאפס.';
   END IF;

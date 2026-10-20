@@ -23,6 +23,16 @@ def _store(session, email):
     }
 
 
+def _is_approved(client, access_token):
+    """Ask the database (not the UI) whether this account is on the approved list.
+    Fails closed: any error means "not approved"."""
+    try:
+        client.postgrest.auth(access_token)
+        return client.rpc("is_approved_user", {}).execute().data is True
+    except Exception:
+        return False
+
+
 def _login_form(client):
     st.markdown(
         """<div style="max-width:420px;margin:40px auto 0;text-align:center">
@@ -51,6 +61,13 @@ def _login_form(client):
         return
     if session is None:
         mid.error("ההתחברות נכשלה.")
+        return
+    if not _is_approved(client, session.access_token):
+        try:
+            client.auth.sign_out()
+        except Exception:
+            pass
+        mid.error("החשבון אינו מאושר לשימוש במערכת (או שאי אפשר לאמת הרשאה כרגע). פנו למנהל המערכת.")
         return
     _store(session, email.strip())
     st.rerun()

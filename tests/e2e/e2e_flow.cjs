@@ -64,6 +64,13 @@ const log = (ok, name, extra = '') => { if (!ok) failures++; console.log(`${ok ?
     await page.getByRole('button', { name: 'כניסה' }).click(); await settle(1500);
     log((await bodyText()).includes('ההתחברות נכשלה'), 'wrong password rejected');
 
+    await page.getByLabel('אימייל').fill('stranger@example.test');
+    await page.getByLabel('סיסמה').fill('stranger-password');
+    await page.getByRole('button', { name: 'כניסה' }).click(); await settle(1800);
+    const tStr = await bodyText();
+    log(tStr.includes('אינו מאושר') && !tStr.includes('סקירה כללית'), 'valid but unapproved account is refused (no app content)');
+
+    await page.getByLabel('אימייל').fill('worker@example.test');
     await page.getByLabel('סיסמה').fill('correct-password');
     await page.getByRole('button', { name: 'כניסה' }).click(); await settle(2500);
     log((await bodyText()).includes('סקירה כללית'), 'login succeeds -> dashboard');

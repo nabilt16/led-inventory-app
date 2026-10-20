@@ -91,6 +91,10 @@ class RpcCall:
 
     def execute(self):
         db, p = self.db, self.params
+        if self.name == "is_approved_user":                  # emulation of public.is_approved_user()
+            if db.fail_on.get(("rpc", "is_approved_user")):
+                raise FakeApiError("function not found")
+            return Result(db.token == "fake-access-worker@example.test")
         if self.name != "receive_order_line":
             raise FakeApiError(f"unknown function {self.name}")
         snapshot = copy.deepcopy(db.tables)           # transaction: all or nothing
@@ -162,7 +166,7 @@ class _AuthResponse:
 class FakeAuth:
     """Stand-in for client.auth. Users: {email: password}."""
 
-    USERS = {"worker@example.test": "correct-password"}
+    USERS = {"worker@example.test": "correct-password", "stranger@example.test": "stranger-password"}
 
     def __init__(self, db):
         self.db = db

@@ -73,6 +73,38 @@ def test_wrong_password_rejected_correct_password_enters_app(monkeypatch):
     assert db.token == "fake-access-worker@example.test"     # user token attached to requests
 
 
+def _login(at, email, password):
+    at.text_input(key="login_email").set_value(email)
+    at.text_input(key="login_password").set_value(password)
+    at.button[0].click()
+    at.run()
+
+
+def test_valid_login_but_not_approved_is_refused_and_signed_out(monkeypatch):
+    db = make_db()
+    monkeypatch.setattr(supabase, "create_client", lambda *a, **k: db)
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    _login(at, "stranger@example.test", "stranger-password")
+    assert not at.exception
+    assert any("אינו מאושר" in e.value for e in at.error)
+    assert "auth" not in at.session_state
+    assert ("auth", "sign_out") in db.calls
+    assert not any(r.key == "desktop_nav" for r in at.radio)
+    assert not any(c[0] in ("santaf_inventory", "led_inventory") for c in db.calls)   # no inventory access
+
+
+def test_approval_check_failure_fails_closed(monkeypatch):
+    db = make_db()
+    db.fail_on[("rpc", "is_approved_user")] = [1]
+    monkeypatch.setattr(supabase, "create_client", lambda *a, **k: db)
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    _login(at, "worker@example.test", "correct-password")
+    assert not at.exception and "auth" not in at.session_state
+    assert any("אינו מאושר" in e.value for e in at.error)
+
+
 def test_expiring_session_is_refreshed(monkeypatch):
     db = make_db()
     at = logged_in_app(monkeypatch, db)
