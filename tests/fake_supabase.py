@@ -1,6 +1,19 @@
-"""Tiny in-memory stand-in for the supabase-py query builder (tests only)."""
+"""Tiny in-memory stand-in for the supabase-py query builder (tests only).
+
+It EMULATES the database functions of migrations/001 so UI/service tests run offline.
+The real SQL (constraints, trigger, atomic functions, RLS) is tested against Postgres in
+tests/integration; this fake is only a convenience and is not proof of database behaviour."""
 import copy
+import itertools
 import uuid
+
+_COUNTER = itertools.count(1)
+ORDER_LINE_DEFAULTS = {
+    "supply": "supplier", "package_no": 1, "item_spec": None, "color": None, "supplier_ref": None,
+    "supplier_order_date": None, "supplier_status": None, "coordination_date": None,
+    "received_date": None, "storage_location": None, "staging_location": None, "picked_qty": 0,
+    "picked_on": None, "issued_on": None, "recipient": None, "notes": None,
+}
 
 
 class Result:
@@ -23,6 +36,10 @@ class Query:
 
     def update(self, payload):
         self.op, self.payload = "update", payload
+        return self
+
+    def delete(self):
+        self.op = "delete"
         return self
 
     def eq(self, col, val):
@@ -63,6 +80,8 @@ class Query:
         rows = self.db.tables.setdefault(self.name, [])
         if self.op == "insert":
             row = {"id": str(uuid.uuid4()), **copy.deepcopy(self.payload)}
+            if self.name == "order_lines":
+                row = {**ORDER_LINE_DEFAULTS, **row, "created_at": f"{next(_COUNTER):012d}"}
             rows.append(row)
             return Result([copy.deepcopy(row)])
         matched = [r for r in rows if all(f(r) for f in self.filters)]
@@ -70,6 +89,10 @@ class Query:
             for r in matched:
                 r.update(copy.deepcopy(self.payload))
             return Result(copy.deepcopy(matched))
+        if self.op == "delete":
+            gone = copy.deepcopy(matched)
+            self.db.tables[self.name] = [r for r in rows if r not in matched]
+            return Result(gone)
         out = copy.deepcopy(matched)
         return Result(out[: self._limit] if self._limit else out)
 
@@ -82,72 +105,112 @@ class FakeApiError(Exception):
         self.message = message
 
 
+def fail(msg):
+    raise FakeApiError("ORDERERR:" + msg)
+
+
 class RpcCall:
-    """EMULATION of public.receive_order_line (migrations/001). The real function is
-    tested against Postgres in tests/integration; this keeps UI/service tests offline."""
+    """Emulation of is_approved_user / pick_stock_line / unpick_stock_line / issue_order_lines."""
 
     def __init__(self, db, name, params):
         self.db, self.name, self.params = db, name, params
 
     def execute(self):
         db, p = self.db, self.params
-        if self.name == "is_approved_user":                  # emulation of public.is_approved_user()
+        if self.name == "is_approved_user":
             if db.fail_on.get(("rpc", "is_approved_user")):
                 raise FakeApiError("function not found")
             return Result(db.token == "fake-access-worker@example.test")
-        if self.name != "receive_order_line":
+        handler = {"pick_stock_line": self._pick, "unpick_stock_line": self._unpick,
+                   "issue_order_lines": self._issue}.get(self.name)
+        if handler is None:
             raise FakeApiError(f"unknown function {self.name}")
-        snapshot = copy.deepcopy(db.tables)           # transaction: all or nothing
+        snapshot = copy.deepcopy(db.tables)           # one transaction: all or nothing
         db.calls.append(("rpc", self.name))
         try:
-            return Result(self._run(db, p))
+            if db.fail_on.get(("rpc", self.name)):
+                db.fail_on[("rpc", self.name)].pop()
+                raise FakeApiError("connection reset")
+            return Result(handler(db, p))
         except Exception:
             db.tables = snapshot
             raise
 
     @staticmethod
-    def _fail(msg):
-        raise FakeApiError("ORDERERR:" + msg)
-
-    def _run(self, db, p):
-        if db.fail_on.get(("rpc", "receive_order_line")):
-            db.fail_on[("rpc", "receive_order_line")].pop()
-            raise FakeApiError("connection reset")
-        if p["p_qty"] is None or p["p_qty"] <= 0:
-            self._fail("הכמות שהתקבלה חייבת להיות גדולה מאפס.")
-        if not (p["p_location"] or "").strip():
-            self._fail("חובה להזין מיקום אחסון.")
-        lines = db.tables.setdefault("order_lines", [])
-        line = next((r for r in lines if r["id"] == p["p_line_id"]), None)
+    def _line(db, line_id):
+        line = next((r for r in db.tables.get("order_lines", []) if r["id"] == line_id), None)
         if line is None:
-            self._fail("שורת ההזמנה לא נמצאה.")
-        if line["status"] != "ordered" or line.get("stock_applied"):
-            self._fail("השורה כבר התקבלה או בוטלה. לא בוצע שינוי במלאי.")
-        if line["category"] == "SANTAF":
-            rows = [r for r in db.tables["santaf_inventory"] if r["length"] == line["length_mm"]]
-            if len(rows) != 1:
-                self._fail("לא נמצאה שורת מלאי יחידה לאורך סנטף.")
-            rows[0]["quantity"] = (rows[0].get("quantity") or 0) + p["p_qty"]
-            if db.fail_on.get(("santaf_movements", "insert")):      # fails AFTER the stock update
-                db.fail_on[("santaf_movements", "insert")].pop()
-                raise FakeApiError("simulated failure")
-            db.tables.setdefault("santaf_movements", []).append(
-                {"id": str(uuid.uuid4()), "length": line["length_mm"], "quantity": p["p_qty"],
-                 "type": "IN", "date": p["p_date"]})
-        else:
-            if db.fail_on.get(("led_inventory", "insert")):
-                db.fail_on[("led_inventory", "insert")].pop()
-                raise FakeApiError("simulated failure")
-            meters = line["length_mm"] / 1000
-            db.tables.setdefault("led_inventory", []).append({
-                "id": str(uuid.uuid4()),
-                "order_number": line.get("supplier_order_ref") or line["customer_order_number"],
-                "led_type": f"{line.get('item_spec') or ''} {meters:g} מ'".strip(),
-                "quantity": p["p_qty"],
-                "notes": f"הזמנת פרגולה {line['customer_order_number']} | מיקום: {p['p_location'].strip()}"})
-        line.update(status="received", stock_applied=True, received_qty=p["p_qty"],
-                    received_date=p["p_date"], storage_location=p["p_location"].strip())
-        return copy.deepcopy(line)
+            fail("שורת ההזמנה לא נמצאה.")
+        return line
+
+    @staticmethod
+    def _inv(db, length):
+        rows = [r for r in db.tables["santaf_inventory"] if r["length"] == length]
+        if len(rows) != 1:
+            fail(f"לא נמצאה שורת מלאי יחידה לאורך {length}. לא בוצע שינוי.")
+        return rows[0]
+
+    @staticmethod
+    def _movement(db, length, qty, typ, when):
+        if db.fail_on.get(("santaf_movements", "insert")):
+            db.fail_on[("santaf_movements", "insert")].pop()
+            raise FakeApiError("simulated failure")
+        db.tables.setdefault("santaf_movements", []).append(
+            {"id": str(uuid.uuid4()), "length": length, "quantity": qty, "type": typ, "date": when})
+
+    def _pick(self, db, p):
+        st = (p["p_staging"] or "").strip()
+        if p["p_qty"] is None or p["p_qty"] <= 0:
+            fail("הכמות לאיסוף חייבת להיות גדולה מאפס.")
+        if not st:
+            fail("חובה להזין מיקום הכנה.")
+        l = self._line(db, p["p_line_id"])
+        if l["supply"] != "stock":
+            fail("רק שורת סנטף מהמלאי הרגיל נאספת מהמלאי.")
+        if l["issued_on"]:
+            fail("השורה כבר נופקה.")
+        if p["p_qty"] > l["quantity"] - l["picked_qty"]:
+            fail(f"הכמות גדולה ממה שנותר לאסוף ({l['quantity'] - l['picked_qty']}).")
+        inv = self._inv(db, l["length_mm"])
+        if (inv.get("quantity") or 0) < p["p_qty"]:
+            fail(f"אין מספיק מלאי זמין באורך {l['length_mm']} (נדרש {p['p_qty']}). לא בוצע שינוי.")
+        inv["quantity"] -= p["p_qty"]
+        self._movement(db, l["length_mm"], p["p_qty"], "PICK", p["p_date"])
+        l.update(picked_qty=l["picked_qty"] + p["p_qty"], picked_on=p["p_date"], staging_location=st)
+        return copy.deepcopy(l)
+
+    def _unpick(self, db, p):
+        l = self._line(db, p["p_line_id"])
+        if l["supply"] != "stock":
+            fail("רק שורת סנטף מהמלאי הרגיל נאספת מהמלאי.")
+        if l["issued_on"]:
+            fail("שורה שנופקה אי אפשר להחזיר למלאי.")
+        if l["picked_qty"] <= 0:
+            fail("אין איסוף להחזרה.")
+        inv = self._inv(db, l["length_mm"])
+        inv["quantity"] = (inv.get("quantity") or 0) + l["picked_qty"]
+        self._movement(db, l["length_mm"], l["picked_qty"], "UNPICK", p["p_date"])
+        l.update(picked_qty=0, picked_on=None)
+        return copy.deepcopy(l)
+
+    def _issue(self, db, p):
+        if not (p["p_recipient"] or "").strip():
+            fail("חובה להזין שם מקבל.")
+        ids = list(dict.fromkeys(p["p_ids"]))
+        lines = [self._line(db, i) for i in ids]
+        for l in lines:
+            if l["issued_on"]:
+                fail("השורה כבר נופקה. לא בוצע שינוי.")
+            if l["supply"] == "stock":
+                if l["picked_qty"] != l["quantity"]:
+                    fail(f"שורת סנטף {l['length_mm']} מ\"מ עדיין לא נאספה במלואה.")
+            elif l["supplier_status"] != "received":
+                fail("השורה עדיין לא התקבלה במחסן.")
+        for l in lines:
+            if l["supply"] == "stock":
+                self._movement(db, l["length_mm"], l["picked_qty"], "OUT", p["p_date"])
+            l.update(issued_on=p["p_date"], recipient=p["p_recipient"].strip())
+        return len(lines)
 
 
 class _Session:
