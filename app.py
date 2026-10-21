@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from supabase import create_client
 from urllib.parse import quote
 import orders_page
+import order_service
 import auth_gate
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://gwiieqmawtudoxafnjeg.supabase.co")
@@ -93,11 +94,16 @@ def ensure_santaf_lengths():
     existing_lengths = {int(r["length"]) for r in rows}
     for length in SANTAF_LENGTHS:
         if length not in existing_lengths:
-            supabase.table("santaf_inventory").insert({
-                "length": length,
-                "quantity": 0,
-                "min_quantity": DEFAULT_MIN_SANTAF
-            }).execute()
+            try:
+                supabase.table("santaf_inventory").insert({
+                    "length": length,
+                    "quantity": 0,
+                    "min_quantity": DEFAULT_MIN_SANTAF
+                }).execute()
+            except Exception:
+                # another session may have created the row first (UNIQUE length): only fail if it is still missing
+                if not supabase.table("santaf_inventory").select("id").eq("length", length).limit(1).execute().data:
+                    raise
 
 
 def reset_led_form():
@@ -643,15 +649,15 @@ elif page == "💡 ניפוק לדים":
             elif issue_qty > current_qty:
                 st.error(f"אין מספיק מלאי. קיים: {current_qty}")
             else:
-                with st.spinner("מעדכן מלאי..."):
-                    new_qty = current_qty - int(issue_qty)
-                    supabase.table("led_inventory").update({
-                        "quantity": new_qty
-                    }).eq("id", selected["id"]).execute()
-
-                st.cache_data.clear()
-                st.success(f"✅ נופקו {issue_qty} לדים להזמנה {pergola_order}.")
-                st.rerun()
+                try:
+                    with st.spinner("מעדכן מלאי..."):
+                        order_service.issue_led_stock(supabase, selected["id"], issue_qty)
+                except order_service.OrderError as exc:
+                    st.error(str(exc))
+                else:
+                    st.cache_data.clear()
+                    st.success(f"✅ נופקו {issue_qty} לדים להזמנה {pergola_order}.")
+                    st.rerun()
 
 elif page == "💡 מלאי לדים":
     st.markdown("""<div class="page-banner"><h2>💡 מלאי לדים</h2><p>כל הלדים הקיימים במלאי</p></div>""", unsafe_allow_html=True)
@@ -709,37 +715,28 @@ elif page == "🟫 קליטת סנטפים":
         if not supplier_ref.strip():
             st.error("חובה להזין מספר הזמנה / אסמכתא.")
         else:
-            total = 0
+            quantities = {length: int(qty) for length, qty in qty_by_length.items() if int(qty) > 0}
 
-            with st.spinner("שומר סנטפים..."):
-                for length, qty in qty_by_length.items():
-                    if int(qty) > 0:
-                        row = get_santaf_row(length)
-                        current = int(row.get("quantity") or 0)
-                        new_qty = current + int(qty)
-
-                        supabase.table("santaf_inventory").update({
-                            "quantity": new_qty
-                        }).eq("id", row["id"]).execute()
-
-                        supabase.table("santaf_movements").insert({
-                            "length": length,
-                            "quantity": int(qty),
-                            "type": "IN",
-                            "date": str(receive_date)
-                        }).execute()
-
-                        total += int(qty)
-
-            if total == 0:
+            if not quantities:
                 st.warning("לא הוזנה שום כמות.")
             else:
-                st.cache_data.clear()
-                st.success(f"✅ נקלטו {total} סנטפים למלאי.")
-                st.rerun()
+                try:
+                    with st.spinner("שומר סנטפים..."):
+                        total = order_service.receive_standard_santaf(supabase, quantities, receive_date)
+                except order_service.OrderError as exc:
+                    st.error(str(exc))
+                else:
+                    st.cache_data.clear()
+                    st.success(f"✅ נקלטו {total} סנטפים למלאי.")
+                    st.rerun()
 
 elif page == "🟫 ניפוק סנטפים":
     st.markdown("""<div class="page-banner"><h2>🟫 ניפוק סנטפים</h2><p>ניפוק סנטפים לפרגולה</p></div>""", unsafe_allow_html=True)
+
+    _flash = st.session_state.pop("santaf_issue_flash", None)
+    if _flash:
+        getattr(st, _flash[0])(_flash[1])
+    st.info("הניפוק כאן נרשם אוטומטית כשורת הזמנה שנופקה, ולא ניתן לנפק סנטף שכבר מתוכנן להזמנה בדף 'הזמנות'.")
 
     pergola_order = text_input_clear("מספר הזמנת פרגולה", key="santaf_issue_order")
     issue_date = st.date_input("תאריך ניפוק", value=date.today(), key="santaf_issue_date")
@@ -771,26 +768,19 @@ elif page == "🟫 ניפוק סנטפים":
             elif issue_qty > current_qty:
                 st.error(f"אין מספיק מלאי. קיים: {current_qty}")
             else:
-                with st.spinner("מעדכן מלאי..."):
-                    new_qty = current_qty - int(issue_qty)
-
-                    supabase.table("santaf_inventory").update({
-                        "quantity": new_qty
-                    }).eq("id", row["id"]).execute()
-
-                    supabase.table("santaf_movements").insert({
-                        "length": length,
-                        "quantity": int(issue_qty),
-                        "type": "OUT",
-                        "date": str(issue_date)
-                    }).execute()
-
-                if new_qty < min_qty:
-                    st.warning(f"✅ נופק, אבל המלאי ירד מתחת למינימום. נשאר: {new_qty}")
+                try:
+                    with st.spinner("מעדכן מלאי..."):
+                        order_service.issue_standard_santaf(supabase, pergola_order, length, issue_qty, issue_date)
+                except order_service.OrderError as exc:
+                    st.error(str(exc))
                 else:
-                    st.success("✅ הסנטף נופק בהצלחה.")
-                st.cache_data.clear()
-                st.rerun()
+                    new_qty = current_qty - int(issue_qty)
+                    if new_qty < min_qty:
+                        st.session_state["santaf_issue_flash"] = ("warning", f"✅ נופק, אבל המלאי ירד מתחת למינימום. נשאר: {new_qty}")
+                    else:
+                        st.session_state["santaf_issue_flash"] = ("success", "✅ הסנטף נופק בהצלחה.")
+                    st.cache_data.clear()
+                    st.rerun()
 
 elif page == "🟫 מלאי סנטפים":
     st.markdown("""<div class="page-banner"><h2>🟫 מלאי סנטפים</h2><p>כל מידות הסנטף וכמויותיהן</p></div>""", unsafe_allow_html=True)

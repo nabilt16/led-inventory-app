@@ -1,7 +1,9 @@
 -- 001_order_lines.sql
--- ADDITIVE ONLY: owner approval table, order_lines, three atomic stock functions.
--- Does not modify led_inventory, santaf_inventory, santaf_movements or leds_inventory
--- and does not change anyone's access to them (that is 002).
+-- Adds: owner approval table, order_lines, and the ATOMIC stock functions that become the
+-- only way to change Santaf/LED stock. Non-destructive: no rows are changed or removed.
+-- The only changes to legacy tables are a UNIQUE index on santaf_inventory(length) and
+-- "quantity >= 0" CHECKs (NOT VALID: existing rows are not re-checked). Access rights of the
+-- legacy tables are changed only later, by 002.
 -- Run manually in the SQL Editor of project "pergola-system" ONLY.
 -- One transaction: if any step fails, nothing is applied.
 --
@@ -46,6 +48,9 @@ BEGIN
        WHERE table_schema='public' AND table_name='app_users'
          AND column_name IN ('user_id','email','active')) <> 3 THEN
     RAISE EXCEPTION 'ABORT: a different public.app_users table already exists';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.santaf_inventory GROUP BY length HAVING count(*) > 1) THEN
+    RAISE EXCEPTION 'ABORT: duplicate lengths exist in santaf_inventory; resolve before the UNIQUE index';
   END IF;
 END $$;
 
@@ -98,6 +103,7 @@ CREATE TABLE IF NOT EXISTS public.order_lines (
   issued_on             date,
   recipient             text,
   notes                 text,
+  manual_issue          boolean     NOT NULL DEFAULT false,
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT ol_led_is_supplier  CHECK (category = 'SANTAF' OR supply = 'supplier'),
@@ -124,12 +130,13 @@ AS $$
 BEGIN
   IF current_setting('app.in_rpc', true) IS DISTINCT FROM '1' THEN
     IF TG_OP = 'INSERT' THEN
-      IF NEW.picked_qty <> 0 OR NEW.picked_on IS NOT NULL OR NEW.issued_on IS NOT NULL OR NEW.recipient IS NOT NULL THEN
+      IF NEW.picked_qty <> 0 OR NEW.picked_on IS NOT NULL OR NEW.issued_on IS NOT NULL OR NEW.recipient IS NOT NULL
+         OR NEW.manual_issue THEN
         RAISE EXCEPTION 'ORDERERR:איסוף וניפוק מתבצעים רק דרך פעולות האיסוף והניפוק.';
       END IF;
     ELSE
-      IF (NEW.picked_qty, NEW.picked_on, NEW.issued_on, NEW.recipient)
-         IS DISTINCT FROM (OLD.picked_qty, OLD.picked_on, OLD.issued_on, OLD.recipient) THEN
+      IF (NEW.picked_qty, NEW.picked_on, NEW.issued_on, NEW.recipient, NEW.manual_issue)
+         IS DISTINCT FROM (OLD.picked_qty, OLD.picked_on, OLD.issued_on, OLD.recipient, OLD.manual_issue) THEN
         RAISE EXCEPTION 'ORDERERR:איסוף וניפוק מתבצעים רק דרך פעולות האיסוף והניפוק.';
       END IF;
       IF OLD.issued_on IS NOT NULL
@@ -208,6 +215,12 @@ BEGIN
   IF p_qty > l.quantity - l.picked_qty THEN
     RAISE EXCEPTION 'ORDERERR:הכמות גדולה ממה שנותר לאסוף (%).', l.quantity - l.picked_qty;
   END IF;
+  IF EXISTS (SELECT 1 FROM public.order_lines o
+              WHERE o.customer_order_number = l.customer_order_number AND o.length_mm = l.length_mm
+                AND o.supply = 'stock' AND o.manual_issue AND o.id <> l.id) THEN
+    RAISE EXCEPTION 'ORDERERR:להזמנה זו כבר נופק ידנית סנטף באותו אורך (דף ניפוק סנטפים). לא נאסף כדי לא לנכות פעמיים.';
+  END IF;
+  PERFORM public.guard_duplicate('pick|' || p_line_id::text || '|' || p_qty::text);
   SELECT count(*) INTO n FROM public.santaf_inventory WHERE length = l.length_mm;
   IF n <> 1 THEN
     RAISE EXCEPTION 'ORDERERR:לא נמצאה שורת מלאי יחידה לאורך %. לא בוצע שינוי.', l.length_mm;
@@ -264,6 +277,7 @@ BEGIN
   INSERT INTO public.santaf_movements (length, quantity, type, "date")
   VALUES (l.length_mm, l.picked_qty, 'UNPICK', d);
 
+  DELETE FROM public.recent_actions WHERE fingerprint LIKE 'pick|' || p_line_id::text || '|%';
   PERFORM set_config('app.in_rpc', '1', true);
   UPDATE public.order_lines
      SET picked_qty = 0, picked_on = NULL, updated_at = now()
@@ -326,5 +340,166 @@ REVOKE ALL ON FUNCTION public.issue_order_lines(uuid[], date, text)       FROM P
 GRANT EXECUTE ON FUNCTION public.pick_stock_line(uuid, integer, date, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.unpick_stock_line(uuid, date)              TO authenticated;
 GRANT EXECUTE ON FUNCTION public.issue_order_lines(uuid[], date, text)      TO authenticated;
+
+-- 4. Duplicate-submission guard + the remaining stock operations --------------------
+-- Every stock change goes through a function in this file. 002 then removes the right to
+-- change stock columns directly, so the old pages cannot deduct twice or overwrite a
+-- concurrent change (no read-modify-write from the app).
+CREATE TABLE IF NOT EXISTS public.recent_actions (
+  fingerprint text        NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS recent_actions_fp_idx ON public.recent_actions (fingerprint, created_at);
+ALTER TABLE public.recent_actions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.recent_actions FROM PUBLIC, anon, authenticated;
+
+-- Rejects an identical action repeated within 15 seconds (double click, retry, two tabs).
+-- Serialised by an advisory lock so two simultaneous identical calls cannot both pass.
+CREATE OR REPLACE FUNCTION public.guard_duplicate(p_fingerprint text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_fingerprint, 0));
+  IF EXISTS (SELECT 1 FROM public.recent_actions
+              WHERE fingerprint = p_fingerprint AND created_at > now() - interval '15 seconds') THEN
+    RAISE EXCEPTION 'ORDERERR:פעולה זהה בוצעה זה עתה ולא בוצעה שוב. אם התכוונתם לבצע אותה שוב, המתינו מספר שניות.';
+  END IF;
+  DELETE FROM public.recent_actions WHERE created_at < now() - interval '1 day';
+  INSERT INTO public.recent_actions (fingerprint) VALUES (p_fingerprint);
+END
+$fn$;
+REVOKE ALL ON FUNCTION public.guard_duplicate(text) FROM PUBLIC, anon, authenticated;
+
+-- Standard Santaf receipt into regular stock (replaces the old read-modify-write).
+CREATE OR REPLACE FUNCTION public.santaf_receive_stock(p_lengths integer[], p_qtys integer[], p_date date)
+RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  i integer; n integer; total integer := 0;
+  d date := coalesce(p_date, current_date);
+BEGIN
+  IF NOT public.is_approved_user() THEN
+    RAISE EXCEPTION 'ORDERERR:אין הרשאה לבצע פעולה זו.';
+  END IF;
+  IF p_lengths IS NULL OR p_qtys IS NULL OR cardinality(p_lengths) = 0
+     OR cardinality(p_lengths) <> cardinality(p_qtys) THEN
+    RAISE EXCEPTION 'ORDERERR:לא הוזנו כמויות לקליטה.';
+  END IF;
+  FOR i IN 1 .. cardinality(p_lengths) LOOP
+    IF p_lengths[i] IS NULL OR p_qtys[i] IS NULL OR p_qtys[i] <= 0 THEN
+      RAISE EXCEPTION 'ORDERERR:כמות הקליטה חייבת להיות גדולה מאפס.';
+    END IF;
+  END LOOP;
+  PERFORM public.guard_duplicate('receive|' || p_lengths::text || '|' || p_qtys::text || '|' || d::text);
+  FOR i IN 1 .. cardinality(p_lengths) LOOP
+    UPDATE public.santaf_inventory SET quantity = coalesce(quantity, 0) + p_qtys[i]
+     WHERE length = p_lengths[i];
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n <> 1 THEN
+      RAISE EXCEPTION 'ORDERERR:לא נמצאה שורת מלאי יחידה לאורך %. לא בוצע שינוי.', p_lengths[i];
+    END IF;
+    INSERT INTO public.santaf_movements (length, quantity, type, "date") VALUES (p_lengths[i], p_qtys[i], 'IN', d);
+    total := total + p_qtys[i];
+  END LOOP;
+  RETURN total;
+END
+$fn$;
+
+-- Direct issue of standard Santaf (the old "ניפוק סנטפים" page): one atomic operation that
+-- creates an already-issued order line, so every deduction is tied to an order.
+CREATE OR REPLACE FUNCTION public.santaf_issue_direct(p_order text, p_length integer, p_qty integer, p_date date)
+RETURNS public.order_lines
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  l   public.order_lines;
+  n   integer;
+  d   date := coalesce(p_date, current_date);
+  ord text := nullif(btrim(coalesce(p_order, '')), '');
+BEGIN
+  IF NOT public.is_approved_user() THEN
+    RAISE EXCEPTION 'ORDERERR:אין הרשאה לבצע פעולה זו.';
+  END IF;
+  IF ord IS NULL THEN RAISE EXCEPTION 'ORDERERR:חובה להזין מספר הזמנת פרגולה.'; END IF;
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'ORDERERR:כמות הניפוק חייבת להיות גדולה מאפס.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.order_lines
+              WHERE customer_order_number = ord AND supply = 'stock' AND length_mm = p_length
+                AND issued_on IS NULL) THEN
+    RAISE EXCEPTION 'ORDERERR:להזמנה זו כבר קיימת שורת סנטף מהמלאי הרגיל באורך % שטרם נופקה. בצעו איסוף וניפוק בדף ההזמנות כדי לא לנכות פעמיים.', p_length;
+  END IF;
+  PERFORM public.guard_duplicate('direct|' || ord || '|' || p_length::text || '|' || p_qty::text || '|' || d::text);
+  SELECT count(*) INTO n FROM public.santaf_inventory WHERE length = p_length;
+  IF n <> 1 THEN
+    RAISE EXCEPTION 'ORDERERR:לא נמצאה שורת מלאי יחידה לאורך %. לא בוצע שינוי.', p_length;
+  END IF;
+  UPDATE public.santaf_inventory SET quantity = quantity - p_qty
+   WHERE length = p_length AND coalesce(quantity, 0) >= p_qty;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n <> 1 THEN
+    RAISE EXCEPTION 'ORDERERR:אין מספיק מלאי זמין באורך % (נדרש %). לא בוצע שינוי.', p_length, p_qty;
+  END IF;
+  INSERT INTO public.santaf_movements (length, quantity, type, "date") VALUES (p_length, p_qty, 'PICK', d);
+  INSERT INTO public.santaf_movements (length, quantity, type, "date") VALUES (p_length, p_qty, 'OUT', d);
+  PERFORM set_config('app.in_rpc', '1', true);
+  INSERT INTO public.order_lines
+    (customer_order_number, category, supply, item_spec, color, length_mm, quantity,
+     picked_qty, picked_on, issued_on, recipient, manual_issue, notes)
+  VALUES (ord, 'SANTAF', 'stock', 'סנטף BH', 'שקוף', p_length, p_qty,
+          p_qty, d, d, 'ניפוק ידני', true, 'נוצר מדף ניפוק סנטפים')
+  RETURNING * INTO l;
+  RETURN l;
+END
+$fn$;
+
+-- Legacy LED stock issue, atomic: never negative, no lost update. Returns the new balance.
+CREATE OR REPLACE FUNCTION public.led_issue_stock(p_id integer, p_qty integer)
+RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE remaining integer;
+BEGIN
+  IF NOT public.is_approved_user() THEN
+    RAISE EXCEPTION 'ORDERERR:אין הרשאה לבצע פעולה זו.';
+  END IF;
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'ORDERERR:כמות הניפוק חייבת להיות גדולה מאפס.';
+  END IF;
+  PERFORM public.guard_duplicate('ledissue|' || p_id::text || '|' || p_qty::text);
+  UPDATE public.led_inventory SET quantity = quantity - p_qty
+   WHERE id = p_id AND coalesce(quantity, 0) >= p_qty
+   RETURNING quantity INTO remaining;
+  IF NOT FOUND THEN
+    IF EXISTS (SELECT 1 FROM public.led_inventory WHERE id = p_id) THEN
+      RAISE EXCEPTION 'ORDERERR:אין מספיק מלאי לדים בשורה זו. לא בוצע שינוי.';
+    END IF;
+    RAISE EXCEPTION 'ORDERERR:שורת הלדים לא נמצאה.';
+  END IF;
+  RETURN remaining;
+END
+$fn$;
+
+REVOKE ALL ON FUNCTION public.santaf_receive_stock(integer[], integer[], date) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.santaf_issue_direct(text, integer, integer, date) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.led_issue_stock(integer, integer)                FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.santaf_receive_stock(integer[], integer[], date) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.santaf_issue_direct(text, integer, integer, date) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.led_issue_stock(integer, integer)                 TO authenticated;
+
+-- 5. Structural safety on the legacy tables (non-destructive) ------------------------
+-- One row per Santaf length (also stops the start-up "ensure lengths" race from duplicating).
+CREATE UNIQUE INDEX IF NOT EXISTS santaf_inventory_length_uq ON public.santaf_inventory (length);
+-- Never negative from now on. NOT VALID: existing rows are not re-checked or rewritten.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'led_inventory_qty_nonneg') THEN
+    ALTER TABLE public.led_inventory ADD CONSTRAINT led_inventory_qty_nonneg CHECK (quantity >= 0) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'santaf_inventory_qty_nonneg') THEN
+    ALTER TABLE public.santaf_inventory ADD CONSTRAINT santaf_inventory_qty_nonneg CHECK (quantity >= 0) NOT VALID;
+  END IF;
+END $$;
 
 COMMIT;

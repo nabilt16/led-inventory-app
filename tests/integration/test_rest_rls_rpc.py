@@ -381,6 +381,167 @@ def test_cannot_change_size_of_a_picked_line():
     assert auth.patch(f"/order_lines?id=eq.{line['id']}", json={"length_mm": 2000}).status_code >= 400
 
 
+# ---- unified stock operations: legacy pages and the order workflow cannot double-deduct
+def recv(c, lengths, qtys, date="2026-10-21"):
+    return rpc(c, "santaf_receive_stock", p_lengths=lengths, p_qtys=qtys, p_date=date)
+
+
+def direct(c, order, length, qty, date="2026-10-21"):
+    return rpc(c, "santaf_issue_direct", p_order=order, p_length=length, p_qty=qty, p_date=date)
+
+
+def led_stock_row(qty):
+    return int(psql(f"insert into led_inventory (order_number, led_type, quantity) values ('T','t',{qty}) returning id").splitlines()[0])
+
+
+def led_qty(row_id):
+    return int(psql(f"select quantity from led_inventory where id={row_id}"))
+
+
+def test_new_functions_are_closed_to_anon_and_unapproved_users():
+    stranger = client("authenticated", STRANGER)
+    calls = [("santaf_receive_stock", dict(p_lengths=[2000], p_qtys=[1], p_date="2026-10-21")),
+             ("santaf_issue_direct", dict(p_order="X", p_length=2000, p_qty=1, p_date="2026-10-21")),
+             ("led_issue_stock", dict(p_id=1, p_qty=1))]
+    before = avail(2000)
+    for name, params in calls:
+        assert rpc(anon, name, **params).status_code in (401, 403, 404), name
+        r = rpc(stranger, name, **params)
+        assert r.status_code >= 400 and "אין הרשאה" in r.text, name
+    assert avail(2000) == before
+    assert auth.get("/recent_actions").status_code in DENIED                 # internal table, not exposed
+
+
+def test_standard_receive_adds_logs_and_is_atomic():
+    set_stock(2000, 10)
+    set_stock(2500, 0)
+    mv = int(psql("select count(*) from santaf_movements"))
+    r = recv(auth, [2000, 2500], [5, 7])
+    assert r.status_code == 200 and r.json() == 12
+    assert avail(2000) == 15 and avail(2500) == 7
+    assert int(psql("select count(*) from santaf_movements")) == mv + 2
+    # one bad item (length without a stock row) rolls the whole receipt back
+    r = recv(auth, [2000, 9999], [3, 3])
+    assert r.status_code >= 400 and "לא נמצאה שורת מלאי" in r.text
+    assert avail(2000) == 15 and int(psql("select count(*) from santaf_movements")) == mv + 2
+
+
+@pytest.mark.parametrize("lengths,qtys", [([2000], [0]), ([2000], [-4]), ([2000, 2500], [3, 0]),
+                                           ([], []), ([2000], [3, 4])])
+def test_standard_receive_rejects_invalid_quantities(lengths, qtys):
+    before = avail(2000)
+    assert recv(auth, lengths, qtys, date="2026-10-22").status_code >= 400
+    assert avail(2000) == before
+
+
+def test_duplicate_receipt_submission_is_refused_but_a_different_one_is_not():
+    set_stock(3000, 0)
+    assert recv(auth, [3000], [4], date="2026-10-23").status_code == 200
+    r = recv(auth, [3000], [4], date="2026-10-23")                       # double click / retry
+    assert r.status_code >= 400 and "פעולה זהה" in r.text
+    assert avail(3000) == 4
+    assert recv(auth, [3000], [5], date="2026-10-23").status_code == 200  # different quantity is legitimate
+    assert avail(3000) == 9
+
+
+def test_parallel_receipts_lose_no_update_and_identical_ones_apply_once():
+    set_stock(3500, 0)
+    with cf.ThreadPoolExecutor(20) as ex:
+        codes = list(ex.map(lambda q: recv(client("authenticated"), [3500], [q], date="2026-10-24").status_code,
+                            range(1, 21)))
+    assert codes == [200] * 20 and avail(3500) == 210                     # 1..20, nothing lost
+    set_stock(4000, 0)
+    with cf.ThreadPoolExecutor(12) as ex:
+        codes = list(ex.map(lambda _: recv(client("authenticated"), [4000], [6], date="2026-10-24").status_code,
+                            range(12)))
+    assert codes.count(200) == 1 and avail(4000) == 6
+
+
+def test_direct_issue_deducts_once_and_records_order_line_and_movements():
+    set_stock(4500, 20)
+    mv_out = movements(4500, "OUT")
+    r = direct(auth, "LEG-1", 4500, 6)
+    assert r.status_code == 200, r.text
+    line = r.json()
+    assert (line["supply"], line["picked_qty"], line["quantity"], line["manual_issue"]) == ("stock", 6, 6, True)
+    assert line["issued_on"] == "2026-10-21" and line["recipient"]
+    assert avail(4500) == 14
+    assert movements(4500, "OUT") == mv_out + 6 and movements(4500, "PICK") >= 6
+    again = direct(auth, "LEG-1", 4500, 6)                               # duplicate submission
+    assert again.status_code >= 400 and avail(4500) == 14
+
+
+def test_direct_issue_refuses_when_the_order_already_has_a_planned_line():
+    """The legacy page and the order workflow can never deduct the same stock twice."""
+    set_stock(5000, 30)
+    planned = new_line(order="DBL-1", length=5000, qty=4)                # planned in the order workflow
+    r = direct(auth, "DBL-1", 5000, 4)
+    assert r.status_code >= 400 and "בדף ההזמנות" in r.text
+    assert avail(5000) == 30
+    assert pick(auth, planned["id"], 4).status_code == 200 and avail(5000) == 26
+    assert direct(auth, "DBL-1", 5000, 4).status_code >= 400             # still planned (picked, not issued)
+    assert issue(auth, planned["id"]).status_code == 200
+    assert avail(5000) == 26
+
+
+def test_pick_is_refused_when_the_legacy_page_already_issued_that_order_and_length():
+    set_stock(5500, 30)
+    assert direct(auth, "DBL-2", 5500, 3).status_code == 200 and avail(5500) == 27
+    later = new_line(order="DBL-2", length=5500, qty=3)                  # planned afterwards
+    r = pick(auth, later["id"], 3)
+    assert r.status_code >= 400 and "נופק ידנית" in r.text
+    assert avail(5500) == 27 and row(later["id"])["picked_qty"] == 0
+
+
+def test_direct_issue_validation_and_insufficient_stock():
+    set_stock(6000, 2)
+    for qty in (0, -1):
+        assert direct(auth, "VAL", 6000, qty).status_code >= 400
+    assert direct(auth, "  ", 6000, 1).status_code >= 400
+    r = direct(auth, "VAL", 6000, 3)
+    assert r.status_code >= 400 and "אין מספיק מלאי" in r.text
+    assert avail(6000) == 2 and psql("select count(*) from order_lines where customer_order_number='VAL'") == "0"
+    assert direct(auth, "VAL", 9999, 1).status_code >= 400               # no stock row for that length
+
+
+def test_parallel_direct_issues_never_go_negative_and_identical_ones_apply_once():
+    set_stock(6500, 5)
+    with cf.ThreadPoolExecutor(20) as ex:
+        codes = list(ex.map(lambda i: direct(client("authenticated"), f"PD-{i}", 6500, 1).status_code, range(20)))
+    assert codes.count(200) == 5 and avail(6500) == 0
+    set_stock(7000, 50)
+    with cf.ThreadPoolExecutor(12) as ex:
+        codes = list(ex.map(lambda _: direct(client("authenticated"), "SAME", 7000, 2).status_code, range(12)))
+    assert codes.count(200) == 1 and avail(7000) == 48
+
+
+def test_led_issue_is_atomic_never_negative_and_duplicate_safe():
+    rid = led_stock_row(10)
+    r = rpc(auth, "led_issue_stock", p_id=rid, p_qty=4)
+    assert r.status_code == 200 and r.json() == 6 and led_qty(rid) == 6
+    assert rpc(auth, "led_issue_stock", p_id=rid, p_qty=4).status_code >= 400          # duplicate within seconds
+    assert led_qty(rid) == 6
+    for qty in (0, -2):
+        assert rpc(auth, "led_issue_stock", p_id=rid, p_qty=qty).status_code >= 400
+    r = rpc(auth, "led_issue_stock", p_id=rid, p_qty=7)
+    assert r.status_code >= 400 and "אין מספיק" in r.text and led_qty(rid) == 6
+    assert rpc(auth, "led_issue_stock", p_id=999999, p_qty=1).status_code >= 400
+    rid2 = led_stock_row(5)
+    with cf.ThreadPoolExecutor(10) as ex:
+        codes = list(ex.map(lambda _: rpc(client("authenticated"), "led_issue_stock", p_id=rid2, p_qty=1).status_code,
+                            range(10)))
+    assert codes.count(200) == 1 and led_qty(rid2) == 4                   # identical parallel issues apply once
+
+
+def test_structural_guards_on_legacy_tables():
+    assert auth.post("/santaf_inventory", json={"length": 2000, "quantity": 0}).status_code >= 400   # UNIQUE length
+    assert psql("select count(*) from santaf_inventory where length=2000") == "1"
+    assert auth.patch("/santaf_inventory?length=eq.8000", json={"quantity": -1}).status_code >= 400   # never negative
+    rid = led_stock_row(3)
+    assert auth.patch(f"/led_inventory?id=eq.{rid}", json={"quantity": -1}).status_code >= 400
+    assert led_qty(rid) == 3
+
+
 # ================= STAGE B: after 002 =================
 def test_zz_stage_b_closes_anonymous_access_and_keeps_approved_users_working():
     # Before: anon can still write legacy tables (today's real production state)
@@ -400,12 +561,20 @@ def test_zz_stage_b_closes_anonymous_access_and_keeps_approved_users_working():
     assert s.get("/led_inventory").json() == [] and s.get("/santaf_inventory").json() == []
     assert s.post("/led_inventory", json={"order_number": "x", "led_type": "t", "quantity": 1}).status_code in DENIED
     assert s.patch("/santaf_inventory?length=eq.8000", json={"min_quantity": 1}).json() == []
-    # approved: legacy screens keep working
+    # approved: legacy screens keep working (reads, new rows, thresholds)
     assert auth.get("/led_inventory?select=id,order_number,led_type,quantity,notes,created_at&order=created_at.desc").status_code == 200
     assert len(auth.get("/santaf_inventory?select=*&order=length").json()) == 14
+    assert auth.get("/santaf_movements?select=*&eq=1").status_code in (200, 400)
     assert auth.patch("/santaf_inventory?length=eq.8000", json={"min_quantity": 20}).status_code == 200
     assert auth.post("/led_inventory", json={"order_number": "post", "led_type": "t", "quantity": 1}).status_code == 201
-    assert auth.post("/santaf_movements", json={"length": 2000, "quantity": 1, "type": "IN", "date": "2026-10-20"}).status_code == 201
+    # stock can only change through the atomic functions: direct writes are refused
+    assert auth.patch("/santaf_inventory?length=eq.8000", json={"quantity": 999}).status_code in DENIED
+    assert auth.patch("/led_inventory?order_number=eq.post", json={"quantity": 999}).status_code in DENIED
+    assert auth.post("/santaf_movements", json={"length": 2000, "quantity": 1, "type": "IN"}).status_code in DENIED
+    assert auth.patch("/santaf_movements?id=gt.0", json={"quantity": 0}).status_code in DENIED
+    assert psql("select has_column_privilege('authenticated','santaf_inventory','quantity','UPDATE')::text") == "false"
+    assert psql("select has_column_privilege('authenticated','santaf_inventory','min_quantity','UPDATE')::text") == "true"
+    assert psql("select has_table_privilege('authenticated','led_inventory','UPDATE')::text") == "false"
     # nobody deletes through the API; unused leds_inventory is read-only
     assert auth.delete("/led_inventory?order_number=eq.post").status_code in DENIED
     assert auth.get("/leds_inventory").status_code == 200
@@ -413,6 +582,12 @@ def test_zz_stage_b_closes_anonymous_access_and_keeps_approved_users_working():
     assert psql("select has_table_privilege('authenticated','led_inventory','TRUNCATE')::text") == "false"
     assert psql("select has_table_privilege('authenticated','led_inventory','DELETE')::text") == "false"
     assert psql("select has_table_privilege('anon','santaf_inventory','SELECT')::text") == "false"
+    # the unified functions still work after hardening
+    set_stock(2000, 10)
+    assert recv(auth, [2000], [5], date="2026-10-26").status_code == 200 and avail(2000) == 15
+    assert direct(auth, "POST-D", 2000, 3, date="2026-10-26").status_code == 200 and avail(2000) == 12
+    rid = led_stock_row(4)
+    assert rpc(auth, "led_issue_stock", p_id=rid, p_qty=1).status_code == 200 and led_qty(rid) == 3
     # order workflow keeps working after hardening (pick/issue are SECURITY DEFINER)
     set_stock(1500, 10)
     line = new_line(order="POST", length=1500, qty=3)
@@ -445,6 +620,14 @@ def test_zzz_release_lifecycle_preserves_data_and_recovers_without_public_writes
     assert psql("select sum(quantity) from led_inventory", db="lifecycle") == "50"
     assert psql("select sum(quantity) from santaf_inventory", db="lifecycle") == "179"
 
+    # 001 refuses to run if duplicate Santaf lengths exist (so its UNIQUE index cannot fail half-way)
+    psql("insert into santaf_inventory (length, quantity) values (2000, 0)", db="lifecycle")
+    out = run_file("migrations/001_order_lines.sql", db="lifecycle", expect_ok=False)
+    assert out.returncode != 0 and "duplicate lengths" in out.stderr
+    psql("delete from santaf_inventory where id = (select max(id) from santaf_inventory)", db="lifecycle")
+    assert psql("select to_regclass('public.order_lines') is null", db="lifecycle") == "t"
+    assert _checksums("lifecycle") == baseline
+
     # 002 must refuse to run before 001 / before anyone is approved (anti lock-out)
     assert run_file("migrations/002_lock_legacy_tables.sql", db="lifecycle", expect_ok=False).returncode != 0
     run_file("migrations/001_order_lines.sql", db="lifecycle")
@@ -462,6 +645,8 @@ def test_zzz_release_lifecycle_preserves_data_and_recovers_without_public_writes
     for t in ("led_inventory", "leds_inventory", "santaf_inventory", "santaf_movements"):
         assert psql(f"select relrowsecurity::text from pg_class where relname='{t}'", db="lifecycle") == "true"
         assert psql(f"select has_table_privilege('anon','{t}','SELECT')::text", db="lifecycle") == "false"
+
+    assert psql("select has_column_privilege('authenticated','santaf_inventory','quantity','UPDATE')::text", db="lifecycle") == "false"
 
     # Recovery 1 (preferred): lock-out fixed by approving a user; public access stays closed
     psql(f"update app_users set active=false", db="lifecycle")
@@ -495,6 +680,14 @@ def test_zzz_release_lifecycle_preserves_data_and_recovers_without_public_writes
 
     # the reset script also works on the real-shaped schema (not executed in production)
     run_file("migrations/001_order_lines.sql", db="lifecycle")
+    # staged goods (picked, not issued) block the reset; created like the real function would
+    psql("select set_config('app.in_rpc','1',false); insert into order_lines "
+         "(customer_order_number,category,supply,length_mm,quantity,picked_qty,picked_on) "
+         "values ('STG','SANTAF','stock',2000,2,2,'2026-10-21')", db="lifecycle")
+    out = run_file("ops/reset_stock_to_zero.sql", db="lifecycle", expect_ok=False)
+    assert out.returncode != 0 and "staged" in out.stderr
+    assert psql("select sum(quantity) from santaf_inventory", db="lifecycle") == "179"          # nothing reset
+    psql("delete from order_lines where customer_order_number='STG'", db="lifecycle")
     run_file("ops/reset_stock_to_zero.sql", db="lifecycle")
     assert psql("select coalesce(sum(quantity),0) from led_inventory", db="lifecycle") == "0"
     assert psql("select coalesce(sum(quantity),0) from santaf_inventory", db="lifecycle") == "0"

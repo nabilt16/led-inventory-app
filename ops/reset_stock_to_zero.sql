@@ -2,7 +2,7 @@
 -- DO NOT RUN WITHOUT EXPLICIT APPROVAL. Production data operation.
 -- Target project: "pergola-system" (ref gwiieqmawtudoxafnjeg) ONLY.
 -- Sets quantity = 0 on every row of led_inventory and santaf_inventory.
--- Keeps all rows, order numbers, LED types, lengths, min_quantity and
+-- Keeps all rows, order numbers, LED types, lengths, min_quantity, order_lines and
 -- santaf_movements. Single atomic DO block: any failed check rolls everything back.
 -- Before running, check that santaf_inventory really has 14 rows (edit the 14 below if not).
 
@@ -31,6 +31,13 @@ BEGIN
       WHERE table_schema='public' AND table_name='santaf_inventory'
         AND column_name IN ('quantity','min_quantity','length')) <> 3 THEN
     RAISE EXCEPTION 'ABORT: expected columns not found - wrong project?';
+  END IF;
+
+  -- Refuse while standard Santaf is staged for an order (picked, not yet issued): resetting
+  -- available stock would leave staged goods untracked. Issue or unpick them first.
+  IF to_regclass('public.order_lines') IS NOT NULL AND EXISTS (
+       SELECT 1 FROM public.order_lines WHERE picked_qty > 0 AND issued_on IS NULL) THEN
+    RAISE EXCEPTION 'ABORT: there are staged (picked, not issued) Santaf lines; issue or unpick them first';
   END IF;
 
   LOCK TABLE public.led_inventory, public.santaf_inventory IN EXCLUSIVE MODE;

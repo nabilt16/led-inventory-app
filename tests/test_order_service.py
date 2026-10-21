@@ -390,3 +390,87 @@ def test_line_state_labels():
     assert svc.line_state(stock)[1] == "ממתין לאיסוף"
     assert svc.line_state(stock, {1: {}})[1] == "חסר במלאי"
     assert svc.line_state({**stock, "picked_qty": 3})[0] == "ready"
+
+
+# ======================= unified stock operations (legacy pages use the same functions) =======================
+def test_standard_receive_adds_stock_and_refuses_an_identical_repeat():
+    db = make_db()
+    assert svc.receive_standard_santaf(db, {2000: 5, 3000: 2}, "2026-10-21") == 7
+    assert stock_of(db, 2000) == 105 and stock_of(db, 3000) == 22
+    with pytest.raises(svc.OrderError) as e:
+        svc.receive_standard_santaf(db, {2000: 5, 3000: 2}, "2026-10-21")
+    assert "פעולה זהה" in str(e.value) and stock_of(db, 2000) == 105
+    assert [m["type"] for m in db.tables["santaf_movements"]] == ["IN", "IN"]
+
+
+@pytest.mark.parametrize("qty", [0, -3, "x"])
+def test_standard_receive_rejects_invalid_quantities(qty):
+    db = make_db()
+    with pytest.raises(svc.OrderError):
+        svc.receive_standard_santaf(db, {2000: qty}, "2026-10-21")
+    assert stock_of(db, 2000) == 100
+    with pytest.raises(svc.OrderError):
+        svc.receive_standard_santaf(db, {}, "2026-10-21")
+
+
+def test_direct_issue_deducts_once_and_is_tied_to_an_order():
+    db = make_db()
+    line = svc.issue_standard_santaf(db, "LEG-1", 2000, 6, "2026-10-21")
+    assert stock_of(db, 2000) == 94 and line["manual_issue"] and line["issued_on"] == "2026-10-21"
+    assert [m["type"] for m in db.tables["santaf_movements"]] == ["PICK", "OUT"]
+    with pytest.raises(svc.OrderError):
+        svc.issue_standard_santaf(db, "LEG-1", 2000, 6, "2026-10-21")     # duplicate submission
+    assert stock_of(db, 2000) == 94
+
+
+def test_direct_issue_and_order_workflow_cannot_deduct_the_same_stock_twice():
+    db = make_db()
+    planned = santaf(db, order="DBL", length=2000, qty=4)
+    with pytest.raises(svc.OrderError) as e:
+        svc.issue_standard_santaf(db, "DBL", 2000, 4, "2026-10-21")
+    assert "בדף ההזמנות" in str(e.value) and stock_of(db, 2000) == 100
+    svc.pick_line(db, planned["id"], 4, "2026-10-21", "B-20")
+    with pytest.raises(svc.OrderError):                                  # still planned (picked, not issued)
+        svc.issue_standard_santaf(db, "DBL", 2000, 4, "2026-10-22")
+    svc.issue_lines(db, [planned["id"]], "2026-10-22", "הלקוח")
+    assert stock_of(db, 2000) == 96
+    # reverse order: legacy issue first, then a plan for the same order+length cannot be picked
+    svc.issue_standard_santaf(db, "DBL2", 3000, 2, "2026-10-21")
+    later = santaf(db, order="DBL2", length=3000, qty=2)
+    with pytest.raises(svc.OrderError) as e:
+        svc.pick_line(db, later["id"], 2, "2026-10-21", "B-20")
+    assert "נופק ידנית" in str(e.value) and stock_of(db, 3000) == 18
+
+
+@pytest.mark.parametrize("order,length,qty", [("", 2000, 1), ("X", 2000, 0), ("X", 2000, -1), ("X", 4500, 5)])
+def test_direct_issue_invalid_or_insufficient_changes_nothing(order, length, qty):
+    db = make_db()
+    with pytest.raises(svc.OrderError):
+        svc.issue_standard_santaf(db, order, length, qty, "2026-10-21")
+    assert [r["quantity"] for r in db.tables["santaf_inventory"]] == [0, 100, 20, 4]
+    assert db.tables["order_lines"] == [] and db.tables["santaf_movements"] == []
+
+
+def test_identical_repeat_pick_is_refused_but_unpick_allows_a_corrected_repick():
+    db = make_db()
+    line = santaf(db, length=2000, qty=10)
+    svc.pick_line(db, line["id"], 4, "2026-10-21", "B-20")
+    with pytest.raises(svc.OrderError) as e:
+        svc.pick_line(db, line["id"], 4, "2026-10-21", "B-20")          # double click
+    assert "פעולה זהה" in str(e.value) and stock_of(db, 2000) == 96
+    svc.unpick_line(db, line["id"])
+    svc.pick_line(db, line["id"], 4, "2026-10-21", "B-21")              # deliberate re-pick works
+    assert stock_of(db, 2000) == 96
+
+
+def test_led_stock_issue_atomic_and_never_negative():
+    db = make_db()
+    assert svc.issue_led_stock(db, 1, 2) == 3
+    with pytest.raises(svc.OrderError):
+        svc.issue_led_stock(db, 1, 2)                                     # identical repeat
+    with pytest.raises(svc.OrderError):
+        svc.issue_led_stock(db, 1, 4)                                     # more than the 3 left
+    for bad in (0, -1):
+        with pytest.raises(svc.OrderError):
+            svc.issue_led_stock(db, 1, bad)
+    assert db.tables["led_inventory"][0]["quantity"] == 3

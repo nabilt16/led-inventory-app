@@ -321,6 +321,33 @@ def issue_lines(client, line_ids, issue_date, recipient):
                                               "p_recipient": _clean(recipient)})
 
 
+# ---- legacy pages: the same atomic database operations (no read-modify-write from the app)
+def receive_standard_santaf(client, quantities, receipt_date):
+    """Add received quantities to standard Santaf stock. quantities: {length_mm: qty}. One atomic
+    operation; an identical repeat within seconds is refused. Returns the total received."""
+    items = [(int(l), _int(q, "כמות הקליטה")) for l, q in quantities.items()]
+    if not items:
+        raise OrderError("לא הוזנה שום כמות.")
+    return _rpc(client, "santaf_receive_stock", {
+        "p_lengths": [l for l, _ in items], "p_qtys": [q for _, q in items],
+        "p_date": _iso(receipt_date) or _iso(date.today())})
+
+
+def issue_standard_santaf(client, order_number, length_mm, qty, issue_date):
+    """Direct issue of standard Santaf (legacy page). Atomic; refused if the order already has a
+    planned stock line of that length (it must be picked/issued in the orders page instead)."""
+    if not _clean(order_number):
+        raise OrderError("חובה להזין מספר הזמנת פרגולה.")
+    return _rpc(client, "santaf_issue_direct", {
+        "p_order": _clean(order_number), "p_length": _int(length_mm, "האורך"),
+        "p_qty": _int(qty, "כמות הניפוק"), "p_date": _iso(issue_date) or _iso(date.today())})
+
+
+def issue_led_stock(client, led_row_id, qty):
+    """Issue legacy LED stock atomically (never negative, no lost update). Returns the new balance."""
+    return _rpc(client, "led_issue_stock", {"p_id": int(led_row_id), "p_qty": _int(qty, "כמות הניפוק")})
+
+
 def issue_target_ids(client, line):
     """Ids to issue together: the whole LED package, or the single line."""
     if not is_package(line):

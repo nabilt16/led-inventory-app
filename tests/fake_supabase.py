@@ -9,6 +9,7 @@ import uuid
 
 _COUNTER = itertools.count(1)
 ORDER_LINE_DEFAULTS = {
+    "manual_issue": False,
     "supply": "supplier", "package_no": 1, "item_spec": None, "color": None, "supplier_ref": None,
     "supplier_order_date": None, "supplier_status": None, "coordination_date": None,
     "received_date": None, "storage_location": None, "staging_location": None, "picked_qty": 0,
@@ -122,7 +123,8 @@ class RpcCall:
                 raise FakeApiError("function not found")
             return Result(db.token == "fake-access-worker@example.test")
         handler = {"pick_stock_line": self._pick, "unpick_stock_line": self._unpick,
-                   "issue_order_lines": self._issue}.get(self.name)
+                   "issue_order_lines": self._issue, "santaf_receive_stock": self._receive_stock,
+                   "santaf_issue_direct": self._issue_direct, "led_issue_stock": self._led_issue}.get(self.name)
         if handler is None:
             raise FakeApiError(f"unknown function {self.name}")
         snapshot = copy.deepcopy(db.tables)           # one transaction: all or nothing
@@ -135,6 +137,15 @@ class RpcCall:
         except Exception:
             db.tables = snapshot
             raise
+
+    @staticmethod
+    def _guard(db, fingerprint):
+        """Emulates guard_duplicate (the real one uses a 15 second window; the fake keeps the
+        fingerprint until it is cleared, which is stricter and good enough offline)."""
+        seen = db.__dict__.setdefault("fingerprints", set())
+        if fingerprint in seen:
+            fail("פעולה זהה בוצעה זה עתה ולא בוצעה שוב. אם התכוונתם לבצע אותה שוב, המתינו מספר שניות.")
+        seen.add(fingerprint)
 
     @staticmethod
     def _line(db, line_id):
@@ -171,6 +182,11 @@ class RpcCall:
             fail("השורה כבר נופקה.")
         if p["p_qty"] > l["quantity"] - l["picked_qty"]:
             fail(f"הכמות גדולה ממה שנותר לאסוף ({l['quantity'] - l['picked_qty']}).")
+        if any(o["customer_order_number"] == l["customer_order_number"] and o["length_mm"] == l["length_mm"]
+               and o["supply"] == "stock" and o.get("manual_issue") and o["id"] != l["id"]
+               for o in db.tables["order_lines"]):
+            fail("להזמנה זו כבר נופק ידנית סנטף באותו אורך (דף ניפוק סנטפים). לא נאסף כדי לא לנכות פעמיים.")
+        self._guard(db, f"pick|{p['p_line_id']}|{p['p_qty']}")
         inv = self._inv(db, l["length_mm"])
         if (inv.get("quantity") or 0) < p["p_qty"]:
             fail(f"אין מספיק מלאי זמין באורך {l['length_mm']} (נדרש {p['p_qty']}). לא בוצע שינוי.")
@@ -188,6 +204,8 @@ class RpcCall:
         if l["picked_qty"] <= 0:
             fail("אין איסוף להחזרה.")
         inv = self._inv(db, l["length_mm"])
+        db.__dict__.setdefault("fingerprints", set())
+        db.fingerprints = {f for f in db.fingerprints if not f.startswith(f"pick|{p['p_line_id']}|")}
         inv["quantity"] = (inv.get("quantity") or 0) + l["picked_qty"]
         self._movement(db, l["length_mm"], l["picked_qty"], "UNPICK", p["p_date"])
         l.update(picked_qty=0, picked_on=None)
@@ -211,6 +229,57 @@ class RpcCall:
                 self._movement(db, l["length_mm"], l["picked_qty"], "OUT", p["p_date"])
             l.update(issued_on=p["p_date"], recipient=p["p_recipient"].strip())
         return len(lines)
+
+
+    def _receive_stock(self, db, p):
+        lengths, qtys = p["p_lengths"], p["p_qtys"]
+        if not lengths or len(lengths) != len(qtys):
+            fail("לא הוזנו כמויות לקליטה.")
+        if any(q is None or q <= 0 for q in qtys):
+            fail("כמות הקליטה חייבת להיות גדולה מאפס.")
+        self._guard(db, f"receive|{lengths}|{qtys}|{p['p_date']}")
+        for length, qty in zip(lengths, qtys):
+            inv = self._inv(db, length)
+            inv["quantity"] = (inv.get("quantity") or 0) + qty
+            self._movement(db, length, qty, "IN", p["p_date"])
+        return sum(qtys)
+
+    def _issue_direct(self, db, p):
+        order = (p["p_order"] or "").strip()
+        if not order:
+            fail("חובה להזין מספר הזמנת פרגולה.")
+        if p["p_qty"] is None or p["p_qty"] <= 0:
+            fail("כמות הניפוק חייבת להיות גדולה מאפס.")
+        if any(o["customer_order_number"] == order and o["supply"] == "stock"
+               and o["length_mm"] == p["p_length"] and not o["issued_on"] for o in db.tables["order_lines"]):
+            fail(f"להזמנה זו כבר קיימת שורת סנטף מהמלאי הרגיל באורך {p['p_length']} שטרם נופקה. "
+                 "בצעו איסוף וניפוק בדף ההזמנות כדי לא לנכות פעמיים.")
+        self._guard(db, f"direct|{order}|{p['p_length']}|{p['p_qty']}|{p['p_date']}")
+        inv = self._inv(db, p["p_length"])
+        if (inv.get("quantity") or 0) < p["p_qty"]:
+            fail(f"אין מספיק מלאי זמין באורך {p['p_length']} (נדרש {p['p_qty']}). לא בוצע שינוי.")
+        inv["quantity"] -= p["p_qty"]
+        self._movement(db, p["p_length"], p["p_qty"], "PICK", p["p_date"])
+        self._movement(db, p["p_length"], p["p_qty"], "OUT", p["p_date"])
+        line = {**ORDER_LINE_DEFAULTS, "id": str(uuid.uuid4()), "customer_order_number": order,
+                "category": "SANTAF", "supply": "stock", "item_spec": "סנטף BH", "color": "שקוף",
+                "length_mm": p["p_length"], "quantity": p["p_qty"], "picked_qty": p["p_qty"],
+                "picked_on": p["p_date"], "issued_on": p["p_date"], "recipient": "ניפוק ידני",
+                "manual_issue": True, "created_at": f"{next(_COUNTER):012d}"}
+        db.tables.setdefault("order_lines", []).append(line)
+        return copy.deepcopy(line)
+
+    def _led_issue(self, db, p):
+        if p["p_qty"] is None or p["p_qty"] <= 0:
+            fail("כמות הניפוק חייבת להיות גדולה מאפס.")
+        self._guard(db, f"ledissue|{p['p_id']}|{p['p_qty']}")
+        row = next((r for r in db.tables["led_inventory"] if r["id"] == p["p_id"]), None)
+        if row is None:
+            fail("שורת הלדים לא נמצאה.")
+        if (row.get("quantity") or 0) < p["p_qty"]:
+            fail("אין מספיק מלאי לדים בשורה זו. לא בוצע שינוי.")
+        row["quantity"] -= p["p_qty"]
+        return row["quantity"]
 
 
 class _Session:

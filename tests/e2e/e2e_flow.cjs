@@ -201,6 +201,30 @@ const log = (ok, name, extra = '') => { if (!ok) failures++; console.log(`${ok ?
     await gotoPage('💡 מלאי לדים');
     log((await bodyText()).includes('OLD-1') && !(await bodyText()).includes('844122'), 'led stock still untouched after package issued');
 
+    // ---- legacy Santaf issue page: atomic, tied to an order, cannot double-deduct
+    async function legacyIssue(order, length, qty) {
+      await gotoPage('🟫 ניפוק סנטפים');
+      await commit(page.getByLabel('מספר הזמנת פרגולה', { exact: true }), order);
+      await choose(/בחר מידה/, String(length));
+      await commit(page.getByLabel('כמות לניפוק'), String(qty));
+      await jsClick(page.getByRole('button', { name: /נפק סנטף/ })); await settle(1800);
+      return bodyText();
+    }
+    t = await legacyIssue('555', 3000, 2);
+    log(t.includes('הסנטף נופק בהצלחה') || t.includes('נופק'), 'legacy issue page: issue succeeds');
+    await gotoPage('🟫 מלאי סנטפים');
+    t = await bodyText();
+    log(/3000 מ"מ[\s\S]{0,80}מלאי נוכחי: 18/.test(t), 'legacy issue deducted once (20 -> 18)');
+    t = await legacyIssue('555', 3000, 2);
+    log(t.includes('פעולה זהה'), 'identical repeat (double click) is refused');
+    t = await legacyIssue('844122', 4500, 1);
+    log(t.includes('בדף ההזמנות'), 'legacy issue refused for an order planned in the orders page (no double deduction)');
+    await gotoPage('🟫 מלאי סנטפים');
+    t = await bodyText();
+    await settle(900); t = await bodyText();
+    const okA = /3000 מ"מ[\s\S]{0,80}מלאי נוכחי: 18/.test(t), okB = /4500 מ"מ[\s\S]{0,80}מלאי נוכחי: 4/.test(t);
+    log(okA && okB, 'stock unchanged by the refused actions (18 / 4)', `A=${okA} B=${okB} codes=${JSON.stringify([...(/4500 מ"מ[\s\S]{0,60}/.exec(t) || [''])[0]].map(c => c.charCodeAt(0).toString(16)).filter(h => +('0x' + h) > 127 && +('0x' + h) < 0x590 || +('0x' + h) > 0x5ff))}`);
+
     // ---- other existing pages still render
     for (const p of ['🏠 דשבורד', '💡 קליטת לדים', '💡 ניפוק לדים', '🟫 קליטת סנטפים', '🟫 ניפוק סנטפים', '⚙️ מינימום סנטפים', '📋 דוחות']) {
       await gotoPage(p);

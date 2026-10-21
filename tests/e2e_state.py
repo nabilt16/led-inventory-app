@@ -2,7 +2,7 @@
 from fake_supabase import FakeClient
 
 LENGTHS = [1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000]
-STOCK = {2000: 100, 4500: 4}
+STOCK = {2000: 100, 3000: 20, 4500: 4}
 
 CLIENT = FakeClient(
     santaf_inventory=[{"id": i, "length": l, "quantity": STOCK.get(l, 0), "min_quantity": 20}
